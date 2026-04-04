@@ -1,9 +1,6 @@
-import { Dashboard } from "@/components/dashboard";
+import { redirect } from "next/navigation";
 
+/** Landing URL sends users straight into the main dashboard experience. */
 export default function Home() {
-  return (
-    <div className="flex flex-1 flex-col items-center bg-zinc-50 px-4 py-16 dark:bg-zinc-950">
-      <Dashboard />
-    </div>
-  );
+  redirect("/dashboard");
 }

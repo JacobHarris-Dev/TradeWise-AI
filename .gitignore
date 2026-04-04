@@ -24,6 +24,11 @@
 .DS_Store
 *.pem
 
+# python
+venv/
+.venv/
+env/
+
 # debug
 npm-debug.log*
 yarn-debug.log*
