@@ -4,6 +4,10 @@
  */
 
 export type TradeSignal = "bullish" | "bearish" | "neutral";
+export type ModelProfile = "safe" | "neutral" | "risky";
+export type ChartType = "line" | "candlestick";
+export type RefreshCadence = "1m" | "5m" | "15m";
+export type LiveStreamFeed = "iex" | "delayed_sip" | "sip";
 
 export type QuoteTechnicals = {
   shortMovingAverage: number;
@@ -22,9 +26,87 @@ export type MockQuote = {
   confidence?: number;
   explanation?: string;
   modelVersion?: string;
+  selectedModelProfile?: ModelProfile | null;
+  selectedChartType?: ChartType;
   history?: number[];
   technicals?: QuoteTechnicals;
   chartDataUri?: string | null;
+};
+
+export type MockTradingAction = "buy" | "sell" | "hold";
+
+export type MockTradingStep = {
+  slot: string;
+  sourceDate: string;
+  price: number;
+  changePercent: number;
+  signal: TradeSignal;
+  confidence: number;
+  action: MockTradingAction;
+  cash: number;
+  shares: number;
+  equity: number;
+};
+
+export type MockTradingSummary = {
+  startingCash: number;
+  startingPrice: number;
+  endingCash: number;
+  endingPrice: number;
+  endingShares: number;
+  endingEquity: number;
+  returnPercent: number;
+  buys: number;
+  sells: number;
+  holds: number;
+};
+
+export type MockTradingDay = {
+  ticker: string;
+  companyName: string;
+  modelProfile: ModelProfile;
+  modelVersion: string;
+  sessionLabel: string;
+  datasetSource: string;
+  steps: MockTradingStep[];
+  summary: MockTradingSummary;
+};
+
+export type AutoTradeResult = {
+  ticker: string;
+  modelProfile: ModelProfile;
+  cadence: RefreshCadence;
+  mode: "paper";
+  signal: TradeSignal;
+  confidence: number;
+  action: "buy" | "sell" | "hold";
+  submitted: boolean;
+  quantity: number;
+  positionBeforeShares: number;
+  orderId?: string | null;
+  statusMessage: string;
+  quote: MockQuote;
+};
+
+export type LiveTradeTick = {
+  type: "trade";
+  symbol: string;
+  price: number;
+  size?: number | null;
+  timestamp: string;
+  feed: LiveStreamFeed;
+};
+
+export type LiveStreamStatus = {
+  type: "status";
+  symbol: string;
+  feed: LiveStreamFeed;
+  status: string;
+};
+
+export type LiveStreamError = {
+  type: "error";
+  message: string;
 };
 
 /** Demo portfolio rows — swap for Firestore `holdings` (or similar) later. */

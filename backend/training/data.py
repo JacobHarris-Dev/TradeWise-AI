@@ -21,5 +21,16 @@ def load_price_history(
     start: str | None = None,
     end: str | None = None,
     period: str = "1y",
+    interval: str = "1d",
+    provider: str = "yfinance",
+    alpaca_feed: str = "delayed_sip",
 ):
-    return download_price_history(ticker, start=start, end=end, period=period)
+    return download_price_history(
+        ticker,
+        start=start,
+        end=end,
+        period=period,
+        interval=interval,
+        provider=provider,
+        alpaca_feed=alpaca_feed,
+    )

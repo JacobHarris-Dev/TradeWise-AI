@@ -1,12 +1,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { getBackendStartupHelp, getNpmCommand, resolveBackendPython } from "./dev-utils.mjs";
 
-const rootDir = resolve(new URL("..", import.meta.url).pathname);
+const rootDir = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const frontendDir = join(rootDir, "frontend");
 const backendDir = join(rootDir, "backend");
-const backendVenvPython = join(backendDir, ".venv", "bin", "python");
-const backendPython = existsSync(backendVenvPython) ? backendVenvPython : "python3";
+const isWindows = process.platform === "win32";
+const backendPython = resolveBackendPython(rootDir, backendDir);
+const npmCommand = getNpmCommand();
 
 function loadEnvFile(envPath) {
   if (!existsSync(envPath)) {
@@ -87,11 +90,12 @@ function shutdown(exitCode = 0) {
   }, 300).unref();
 }
 
-function spawnService(command, args, cwd, env) {
+function spawnService(command, args, cwd, env, options = {}) {
   const child = spawn(command, args, {
     cwd,
     env,
     stdio: "inherit",
+    shell: options.shell ?? false,
   });
 
   child.on("exit", (code, signal) => {
@@ -105,19 +109,35 @@ function spawnService(command, args, cwd, env) {
     shutdown(code ?? 0);
   });
 
+  child.on("error", (error) => {
+    if (shuttingDown) {
+      return;
+    }
+
+    const detail =
+      options.serviceName === "backend"
+        ? `${getBackendStartupHelp(rootDir, backendDir)}\n\nOriginal error: ${error.message}`
+        : `Unable to start ${options.serviceName ?? "service"}.\n\nOriginal error: ${error.message}`;
+
+    console.error(detail);
+    shutdown(1);
+  });
+
   return child;
 }
 
 frontend = spawnService(
-  "npm",
+  npmCommand,
   ["run", "dev", "--", "--hostname", "127.0.0.1", "--port", frontendPort],
   frontendDir,
   frontendEnv,
+  { serviceName: "frontend", shell: isWindows },
 );
 
 backend = spawnService(
-  backendPython,
+  backendPython.command,
   [
+    ...backendPython.args,
     "-m",
     "uvicorn",
     "tradewise_backend.main:app",
@@ -131,6 +151,7 @@ backend = spawnService(
   ],
   backendDir,
   backendEnv,
+  { serviceName: "backend" },
 );
 
 process.on("SIGINT", () => shutdown(0));

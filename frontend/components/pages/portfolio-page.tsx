@@ -1,5 +1,6 @@
 "use client";
 
+import { AiDisclaimer } from "@/components/layout/ai-disclaimer";
 import { MOCK_HOLDINGS, getMockStockQuote } from "@/lib/mocks/stock-data";
 import { HoldingCard } from "@/components/portfolio/holding-card";
 
@@ -36,6 +37,8 @@ export function PortfolioPage() {
           );
         })}
       </ul>
+
+      <AiDisclaimer />
     </div>
   );
 }

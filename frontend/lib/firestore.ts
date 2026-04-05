@@ -32,9 +32,13 @@ export async function upsertUserDocument(user: User) {
 }
 
 const TICKER_RE = /^[A-Z0-9.\-]{1,16}$/;
+const TICKER_ALIASES: Record<string, string> = {
+  APPL: "AAPL",
+};
 
 export function normalizeTicker(raw: string): string {
-  return raw.trim().toUpperCase();
+  const normalized = raw.trim().toUpperCase();
+  return TICKER_ALIASES[normalized] ?? normalized;
 }
 
 export function isValidTicker(ticker: string): boolean {
@@ -68,6 +72,8 @@ export function subscribeToWatchlist(
   return onSnapshot(ref, (snap) => {
     const data = snap.data();
     const tickers = (data?.tickers as string[] | undefined) ?? [];
-    onTickers([...tickers].sort());
+    onTickers(
+      [...new Set(tickers.map((ticker) => normalizeTicker(ticker)))].sort(),
+    );
   });
 }
