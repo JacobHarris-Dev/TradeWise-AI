@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { BrandWordmark } from "@/components/brand/brand-wordmark";
 import { LoginButton } from "@/components/auth/login-button";
 import { MainNav } from "@/components/layout/main-nav";
 
@@ -16,12 +16,7 @@ export function AppShell({ children }: AppShellProps) {
       <header className="border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-8">
-            <Link
-              href="/dashboard"
-              className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-50"
-            >
-              TradeWise
-            </Link>
+            <BrandWordmark href="/dashboard" />
             <MainNav />
           </div>
           <LoginButton />

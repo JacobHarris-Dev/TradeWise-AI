@@ -10,8 +10,8 @@ const LINKS = [
 ] as const;
 
 /**
- * Primary navigation for the authenticated-style app shell.
- * Highlights the active route using Next.js’ pathname hook.
+ * Primary navigation for the app shell.
+ * Sign-in is only in the header (LoginButton on the right).
  */
 export function MainNav() {
   const pathname = usePathname();

@@ -1,0 +1,14 @@
+rules_version = '2';
+
+// Deploy: Firebase Console → Firestore → Rules → paste → Publish
+// Or: firebase deploy --only firestore:rules (if you use Firebase CLI)
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    match /watchlists/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}
