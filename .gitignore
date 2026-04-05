@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+frontend/node_modules
 /.pnp
 .pnp.*
 .yarn/*
@@ -15,19 +16,42 @@
 
 # next.js
 /.next/
+frontend/.next/
 /out/
 
 # production
 /build
 
+# training artifacts
+backend/artifacts/*
+!backend/artifacts/.gitkeep
+
 # misc
 .DS_Store
+.vscode/
 *.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+*.jks
+*.keystore
+*serviceAccount*.json
+*credentials*.json
+firebase-adminsdk*.json
+secrets*.json
 
 # python
+__pycache__/
+*.pyc
 venv/
 .venv/
 env/
+backend/.venv/
+backend/venv/
+backend/env/
 
 # debug
 npm-debug.log*
@@ -38,10 +62,12 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 !.env.example
+!frontend/.env.example
+!backend/.env.example
 
 # vercel
 .vercel
 
 # typescript
 *.tsbuildinfo
-next-env.d.ts
+frontend/next-env.d.ts

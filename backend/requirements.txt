@@ -1,0 +1,10 @@
+fastapi
+httpx
+matplotlib
+numpy
+pandas
+QuantLib
+scikit-learn
+yfinance
+uvicorn[standard]
+pydantic

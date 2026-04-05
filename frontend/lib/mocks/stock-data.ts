@@ -3,15 +3,29 @@
  * Replace with Firestore or a market API when you wire real data.
  */
 
+export type TradeSignal = "bullish" | "bearish" | "neutral";
+
+export type QuoteTechnicals = {
+  shortMovingAverage: number;
+  longMovingAverage: number;
+  volatility: number;
+  momentum: number;
+  discountFactor: number;
+};
+
 export type MockQuote = {
   ticker: string;
   companyName: string;
   lastPrice: number;
   changePercent: number;
+  signal?: TradeSignal;
+  confidence?: number;
+  explanation?: string;
+  modelVersion?: string;
+  history?: number[];
+  technicals?: QuoteTechnicals;
+  chartDataUri?: string | null;
 };
-
-/** Shown on the dashboard when the user is not signed in (no Firestore watchlist). */
-export const MOCK_WATCHLIST_TICKERS = ["AAPL", "MSFT", "GOOGL", "NVDA"] as const;
 
 /** Demo portfolio rows — swap for Firestore `holdings` (or similar) later. */
 export type MockHolding = {
@@ -23,13 +37,6 @@ export const MOCK_HOLDINGS: MockHolding[] = [
   { ticker: "AAPL", shares: 10 },
   { ticker: "MSFT", shares: 4 },
   { ticker: "VOO", shares: 25 },
-];
-
-/** Broad-market placeholders for the dashboard “Market overview” section. */
-export const MOCK_MARKET_SUMMARY: MockQuote[] = [
-  { ticker: "SPY", companyName: "S&P 500 ETF", lastPrice: 502.3, changePercent: 0.31 },
-  { ticker: "QQQ", companyName: "Nasdaq 100 ETF", lastPrice: 438.1, changePercent: -0.12 },
-  { ticker: "DIA", companyName: "Dow ETF", lastPrice: 389.55, changePercent: 0.08 },
 ];
 
 const KNOWN_QUOTES: Record<string, MockQuote> = {

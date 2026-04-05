@@ -1,13 +1,23 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import Image from "next/image";
 import { fetchStockQuote } from "@/lib/stock-quote";
 import { StockCard } from "@/components/stock/stock-card";
 import type { MockQuote } from "@/lib/mocks/stock-data";
 
+const SIGNAL_BADGES = {
+  bullish:
+    "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300",
+  bearish:
+    "bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-300",
+  neutral:
+    "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200",
+} as const;
+
 /**
- * Trade route: ticker input, mock quote via `fetchStockQuote` (swap for a real API later),
- * and non-functional Buy / Sell actions for layout only.
+ * Trade route: ticker input, ML quote via `fetchStockQuote`, and non-functional
+ * Buy / Sell actions for layout only.
  */
 export function TradePage() {
   const [tickerInput, setTickerInput] = useState("AAPL");
@@ -28,8 +38,8 @@ export function TradePage() {
     try {
       const q = await fetchStockQuote(raw);
       setQuote(q);
-    } catch {
-      setError("Could not load quote (demo).");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load quote.");
       setQuote(null);
     } finally {
       setLoading(false);
@@ -37,9 +47,10 @@ export function TradePage() {
   }, [tickerInput]);
 
   const simulateOrder = useCallback((side: "buy" | "sell") => {
+    const orderTicker = quote?.ticker ?? (tickerInput.trim().toUpperCase() || "—");
     setLastAction(
       `${side === "buy" ? "Buy" : "Sell"} simulated — no order sent. ` +
-        `(Ticker: ${quote?.ticker ?? tickerInput.trim().toUpperCase() || "—"})`,
+        `(Ticker: ${orderTicker})`,
     );
   }, [quote?.ticker, tickerInput]);
 
@@ -50,8 +61,8 @@ export function TradePage() {
           Trade
         </h1>
         <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-          Look up a symbol (mock data). Wire `fetchStockQuote` in `lib/stock-quote.ts`
-          to your brokerage or market data API when ready.
+          Look up a symbol and pull the model output from the Python backend via
+          the Next.js proxy route.
         </p>
       </section>
 
@@ -88,6 +99,74 @@ export function TradePage() {
       {quote ? (
         <section className="flex flex-col gap-4">
           <StockCard quote={quote} />
+          {quote.chartDataUri ? (
+            <section className="rounded-2xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950">
+              <Image
+                src={quote.chartDataUri}
+                alt={`${quote.ticker} synthetic price chart`}
+                width={960}
+                height={360}
+                unoptimized
+                className="h-auto w-full rounded-xl"
+              />
+            </section>
+          ) : null}
+          {quote.signal ? (
+            <section className="rounded-2xl border border-zinc-200 bg-zinc-50/80 p-4 dark:border-zinc-800 dark:bg-zinc-900/60">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                  Model readout
+                </h2>
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${
+                    SIGNAL_BADGES[quote.signal]
+                  }`}
+                >
+                  {quote.signal}
+                </span>
+              </div>
+
+              <dl className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    Confidence
+                  </dt>
+                  <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                    {quote.confidence?.toFixed(1) ?? "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    Model
+                  </dt>
+                  <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                    {quote.modelVersion ?? "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    Change
+                  </dt>
+                  <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                    {quote.changePercent >= 0 ? "+" : ""}
+                    {quote.changePercent.toFixed(2)}%
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    Last price
+                  </dt>
+                  <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                    ${quote.lastPrice.toFixed(2)}
+                  </dd>
+                </div>
+              </dl>
+
+              <p className="mt-3 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+                {quote.explanation}
+              </p>
+            </section>
+          ) : null}
           <div className="flex gap-3">
             <button
               type="button"
@@ -107,8 +186,8 @@ export function TradePage() {
         </section>
       ) : (
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          Load a quote to see mock price data and enable the order buttons (still
-          non-functional).
+          Load a quote to see backend-backed price data and enable the order
+          buttons (still non-functional).
         </p>
       )}
 

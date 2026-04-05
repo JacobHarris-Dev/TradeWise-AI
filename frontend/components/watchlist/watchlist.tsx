@@ -1,25 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
   addTickerToWatchlist,
   subscribeToWatchlist,
 } from "@/lib/firestore";
-import {
-  MOCK_WATCHLIST_TICKERS,
-  getMockStockQuote,
-} from "@/lib/mocks/stock-data";
+import { fetchStockQuotes } from "@/lib/stock-quote";
+import type { MockQuote } from "@/lib/mocks/stock-data";
 import { StockCard } from "@/components/stock/stock-card";
+
+const GUEST_WATCHLIST_TICKERS = ["AAPL", "MSFT", "GOOGL", "NVDA"] as const;
 
 /**
  * Watchlist block for the dashboard:
  * - Signed-in users: live Firestore list + add ticker.
- * - Guests: read-only demo tickers so the layout still looks complete.
+ * - Guests: live quotes for a fixed starter symbol set.
  */
 export function Watchlist() {
   const { user, loading: authLoading } = useAuth();
   const [tickers, setTickers] = useState<string[]>([]);
+  const [quotes, setQuotes] = useState<MockQuote[]>([]);
+  const [quotesLoading, setQuotesLoading] = useState(false);
+  const [quotesError, setQuotesError] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,10 +36,54 @@ export function Watchlist() {
     return subscribeToWatchlist(user.uid, setTickers);
   }, [user]);
 
-  const displayTickers = useMemo(() => {
-    if (user) return tickers;
-    return [...MOCK_WATCHLIST_TICKERS];
-  }, [user, tickers]);
+  const displayTickers = user ? tickers : GUEST_WATCHLIST_TICKERS;
+
+  useEffect(() => {
+    let active = true;
+
+    if (authLoading) {
+      setQuotes([]);
+      setQuotesError(null);
+      setQuotesLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    if (displayTickers.length === 0) {
+      setQuotes([]);
+      setQuotesError(null);
+      setQuotesLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    setQuotesLoading(true);
+    setQuotesError(null);
+
+    void (async () => {
+      try {
+        const liveQuotes = await fetchStockQuotes([...displayTickers], {
+          includeChart: false,
+        });
+        if (!active) return;
+        setQuotes(liveQuotes);
+      } catch (e) {
+        if (!active) return;
+        setQuotes([]);
+        setQuotesError(e instanceof Error ? e.message : "Could not load live quotes.");
+      } finally {
+        if (active) {
+          setQuotesLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [authLoading, displayTickers]);
 
   const onAdd = useCallback(async () => {
     if (!user) return;
@@ -102,14 +149,22 @@ export function Watchlist() {
       ) : null}
 
       <ul className="mt-4 grid gap-3 sm:grid-cols-2">
-        {displayTickers.length === 0 ? (
+        {quotesLoading ? (
+          <li className="text-sm text-zinc-500 dark:text-zinc-400">
+            Loading live quotes…
+          </li>
+        ) : quotesError ? (
+          <li className="text-sm text-red-600 dark:text-red-400">
+            {quotesError}
+          </li>
+        ) : displayTickers.length === 0 ? (
           <li className="text-sm text-zinc-500 dark:text-zinc-400">
             No tickers yet. Add symbols above.
           </li>
         ) : (
-          displayTickers.map((t) => (
-            <li key={t}>
-              <StockCard quote={getMockStockQuote(t)} />
+          quotes.map((quote) => (
+            <li key={quote.ticker}>
+              <StockCard quote={quote} />
             </li>
           ))
         )}
