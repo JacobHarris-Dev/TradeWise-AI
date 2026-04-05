@@ -15,7 +15,11 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "TradeWise",
-  description: "Stock watchlist with Firebase Auth",
+  description: "Smart trading intelligence — watchlist and insights",
+  icons: {
+    icon: [{ url: "/brand/tradewise-icon.png", type: "image/png" }],
+    apple: "/brand/tradewise-icon.png",
+  },
 };
 
 export default function RootLayout({
@@ -28,7 +32,8 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="flex min-h-full flex-col">
+      {/* Grammarly and similar extensions inject attributes on <body>; suppress avoids false hydration warnings. */}
+      <body className="flex min-h-full flex-col" suppressHydrationWarning>
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
