@@ -1,9 +1,12 @@
 "use client";
 
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useAuth } from "@/components/providers/auth-provider";
 
 export function LoginButton() {
-  const { user, loading, signInWithGoogle, signOut } = useAuth();
+  const pathname = usePathname();
+  const { user, loading, signOut } = useAuth();
 
   if (loading) {
     return (
@@ -30,13 +33,17 @@ export function LoginButton() {
     );
   }
 
+  const loginHref =
+    pathname && pathname !== "/login"
+      ? `/login?next=${encodeURIComponent(pathname)}`
+      : "/login";
+
   return (
-    <button
-      type="button"
-      onClick={() => void signInWithGoogle()}
+    <Link
+      href={loginHref}
       className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
     >
-      Sign in with Google
-    </button>
+      Log in
+    </Link>
   );
 }

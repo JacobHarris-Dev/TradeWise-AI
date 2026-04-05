@@ -1,15 +1,22 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { getBackendStartupHelp, getNpmCommand, resolveBackendPython } from "./dev-utils.mjs";
 
-const rootDir = resolve(fileURLToPath(new URL("..", import.meta.url)));
+const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const frontendDir = join(rootDir, "frontend");
 const backendDir = join(rootDir, "backend");
-const isWindows = process.platform === "win32";
-const backendPython = resolveBackendPython(rootDir, backendDir);
-const npmCommand = getNpmCommand();
+
+const isWin = process.platform === "win32";
+const backendVenvPython = isWin
+  ? join(backendDir, ".venv", "Scripts", "python.exe")
+  : join(backendDir, ".venv", "bin", "python");
+const backendPython = existsSync(backendVenvPython)
+  ? backendVenvPython
+  : isWin
+    ? "python"
+    : "python3";
+
 
 function loadEnvFile(envPath) {
   if (!existsSync(envPath)) {
@@ -90,12 +97,11 @@ function shutdown(exitCode = 0) {
   }, 300).unref();
 }
 
-function spawnService(command, args, cwd, env, options = {}) {
+function spawnService(command, args, cwd, env) {
   const child = spawn(command, args, {
     cwd,
     env,
     stdio: "inherit",
-    shell: options.shell ?? false,
   });
 
   child.on("exit", (code, signal) => {
@@ -131,7 +137,6 @@ frontend = spawnService(
   ["run", "dev", "--", "--hostname", "127.0.0.1", "--port", frontendPort],
   frontendDir,
   frontendEnv,
-  { serviceName: "frontend", shell: isWindows },
 );
 
 backend = spawnService(
