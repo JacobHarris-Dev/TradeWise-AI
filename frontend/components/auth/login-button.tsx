@@ -19,7 +19,7 @@ export function LoginButton() {
   if (user) {
     return (
       <div className="flex flex-wrap items-center gap-3">
-        <span className="max-w-[220px] truncate text-sm text-zinc-600 dark:text-zinc-300">
+        <span className="max-w-55 truncate text-sm text-zinc-600 dark:text-zinc-300">
           {user.displayName ?? user.email ?? user.uid}
         </span>
         <button

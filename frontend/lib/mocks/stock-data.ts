@@ -31,6 +31,10 @@ export type MockQuote = {
   history?: number[];
   technicals?: QuoteTechnicals;
   chartDataUri?: string | null;
+  newsSummary?: string | null;
+  newsSentiment?: "positive" | "negative" | "neutral" | null;
+  newsTopics?: string[];
+  newsHeadlines?: string[];
 };
 
 export type MockTradingAction = "buy" | "sell" | "hold";

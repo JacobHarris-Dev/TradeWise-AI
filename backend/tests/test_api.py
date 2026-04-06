@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from tradewise_backend.main import app
+from tradewise_backend.news import NewsContext
 from tradewise_backend.schemas import (
     AutoTradeResponse,
     MockTradingDayResponse,
@@ -123,7 +124,19 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(body["service"], "tradewise-ml")
 
     def test_quote_contract(self) -> None:
-        with patch("tradewise_backend.engine.get_close_history", return_value=sample_close_history()):
+        with (
+            patch("tradewise_backend.engine.get_close_history", return_value=sample_close_history()),
+            patch(
+                "tradewise_backend.engine.build_news_context",
+                return_value=NewsContext(
+                    summary="Apple headlines stay focused on AI demand and product momentum.",
+                    sentiment="positive",
+                    topics=("ai", "products"),
+                    headlines=("Apple headlines stay focused on AI demand.",),
+                    article_count=1,
+                ),
+            ),
+        ):
             response = self.client.get(
                 "/v1/quote",
                 params={
@@ -141,6 +154,8 @@ class ApiTestCase(unittest.TestCase):
         self.assertTrue(body["chartDataUri"].startswith("data:image/png;base64,"))
         self.assertEqual(body["selectedModelProfile"], "neutral")
         self.assertEqual(body["selectedChartType"], "line")
+        self.assertEqual(body["newsSentiment"], "positive")
+        self.assertEqual(body["newsTopics"], ["ai", "products"])
 
     def test_invalid_ticker_rejected(self) -> None:
         response = self.client.get("/v1/quote", params={"ticker": "bad ticker"})

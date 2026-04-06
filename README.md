@@ -47,3 +47,66 @@ Practical default:
 - Use Alpaca with `--interval 15m --alpaca-feed delayed_sip` when you want the model to train on the same delayed intraday bar shape you expect during market hours.
 - `yfinance` intraday intervals are limited to roughly the last 60 days, so the training script automatically caps open-ended intraday downloads to that window.
 - `tradewise_training_dataset.csv` can now be used directly for training; the script translates its engineered columns into the runtime feature set used by the API.
+
+## Hugging Face Setup
+
+If you want to experiment with a local instruct model, the repo now includes a
+download helper at `backend/training/download_hf_model.py`.
+
+1. Install the backend dependencies:
+
+```bash
+python -m pip install -r backend/requirements.txt
+```
+
+2. Log in if the model requires it:
+
+```bash
+hf auth login
+```
+
+3. Download the default instruct model:
+
+```bash
+python backend/training/download_hf_model.py
+```
+
+The default model is `Qwen/Qwen2.5-1.5B-Instruct`.
+
+Helpful options:
+
+```bash
+python backend/training/download_hf_model.py --tokenizer-only
+python backend/training/download_hf_model.py --cache-dir .hf-cache
+python backend/training/download_hf_model.py --model-name Qwen/Qwen2.5-1.5B-Instruct --device-map cpu
+```
+
+If you want the model to load on an NVIDIA GPU instead of CPU, install the CUDA
+PyTorch wheel first:
+
+```bash
+python -m pip install --force-reinstall torch --index-url https://download.pytorch.org/whl/cu130
+```
+
+By default, Hugging Face stores downloads under `~/.cache/huggingface/` unless
+you override the cache directory.
+
+## News Context
+
+TradeWise can now start blending recent stock headlines into the explanation
+layer as supporting context.
+
+- Live quote responses can include a short news summary, sentiment, and detected topics.
+- `backend/src/tradewise_backend/news.py` pulls recent `yfinance` headlines and converts them into lightweight structured context.
+- `backend/training/enrich_dataset_with_news.py` can enrich an existing CSV with `news_summary`, `news_sentiment`, `news_sentiment_score`, `news_topics`, and `news_headline_count`.
+
+Example:
+
+```bash
+python backend/training/enrich_dataset_with_news.py --input-csv tradewise_training_dataset.csv
+```
+
+This first pass is intentionally simple: the trading signal still comes from the
+quant model, while recent news is used as supporting explanation context.
+For older historical CSVs, `yfinance` news often will not backfill many rows;
+it is strongest for live explanations and MVP-quality recent context.

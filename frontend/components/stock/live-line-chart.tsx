@@ -41,10 +41,10 @@ export function LiveLineChart({ history, ticker }: LiveLineChartProps) {
       <div className="mb-2 flex items-center justify-between gap-3">
         <div>
           <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-            Live price view
+            Price trend
           </p>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Refreshes as new quote reads come in for {ticker}.
+            Moves with incoming market updates for {ticker}.
           </p>
         </div>
         <div className="text-right">

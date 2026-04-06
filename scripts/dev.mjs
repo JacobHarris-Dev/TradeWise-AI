@@ -12,10 +12,20 @@ const backendVenvPython = isWin
   ? join(backendDir, ".venv", "Scripts", "python.exe")
   : join(backendDir, ".venv", "bin", "python");
 const backendPython = existsSync(backendVenvPython)
-  ? backendVenvPython
+  ? { command: backendVenvPython, args: [] }
   : isWin
-    ? "python"
-    : "python3";
+    ? { command: "python", args: [] }
+    : { command: "python3", args: [] };
+const npmCommand = "npm";
+
+function getBackendStartupHelp(rootPath, backendPath) {
+  return [
+    "Unable to start backend service.",
+    `Workspace root: ${rootPath}`,
+    `Backend dir: ${backendPath}`,
+    "Ensure backend dependencies are installed and Python is available.",
+  ].join("\n");
+}
 
 
 function loadEnvFile(envPath) {
@@ -97,11 +107,12 @@ function shutdown(exitCode = 0) {
   }, 300).unref();
 }
 
-function spawnService(command, args, cwd, env) {
+function spawnService(command, args, cwd, env, options = {}) {
   const child = spawn(command, args, {
     cwd,
     env,
     stdio: "inherit",
+    ...(options.spawnOptions ?? {}),
   });
 
   child.on("exit", (code, signal) => {
@@ -137,6 +148,8 @@ frontend = spawnService(
   ["run", "dev", "--", "--hostname", "127.0.0.1", "--port", frontendPort],
   frontendDir,
   frontendEnv,
+  // Windows: plain spawn("npm") gets ENOENT; shell finds npm.cmd on PATH.
+  { spawnOptions: { shell: isWin }, serviceName: "frontend" },
 );
 
 backend = spawnService(

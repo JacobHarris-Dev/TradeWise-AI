@@ -7,6 +7,7 @@ ModelProfile = Literal["safe", "neutral", "risky"]
 ChartType = Literal["line", "candlestick"]
 RefreshCadence = Literal["1m", "5m", "15m"]
 LiveStreamFeed = Literal["iex", "delayed_sip", "sip"]
+NewsSentiment = Literal["positive", "negative", "neutral"]
 
 
 class TechnicalSnapshot(BaseModel):
@@ -31,6 +32,10 @@ class QuoteResponse(BaseModel):
     history: list[float]
     technicals: TechnicalSnapshot
     chartDataUri: str | None = None
+    newsSummary: str | None = None
+    newsSentiment: NewsSentiment | None = None
+    newsTopics: list[str] = Field(default_factory=list)
+    newsHeadlines: list[str] = Field(default_factory=list)
 
 
 class AnalyzeRequest(BaseModel):
