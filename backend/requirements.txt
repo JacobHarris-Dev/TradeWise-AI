@@ -5,6 +5,9 @@ numpy
 pandas
 QuantLib
 scikit-learn
+xgboost
 yfinance
+alpaca-py
+websockets
 uvicorn[standard]
 pydantic

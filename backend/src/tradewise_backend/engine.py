@@ -23,11 +23,14 @@ from .features import (
     build_latest_features,
     discount_factor,
 )
-from .market_data import get_close_history
-from .model_runtime import load_model_bundle, predict_signal
-from .schemas import QuoteResponse, SignalLabel, TechnicalSnapshot
+from .market_data import get_close_history, get_ohlc_history
+from .model_runtime import load_model_bundle, normalize_model_profile, predict_signal
+from .schemas import ChartType, QuoteResponse, SignalLabel, TechnicalSnapshot
 
 TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,16}$")
+TICKER_ALIASES = {
+    "APPL": "AAPL",
+}
 
 
 @dataclass(frozen=True)
@@ -48,7 +51,8 @@ KNOWN_QUOTES: dict[str, str] = {
 
 
 def normalize_ticker(raw_ticker: str) -> str:
-    return raw_ticker.strip().upper()
+    normalized = raw_ticker.strip().upper()
+    return TICKER_ALIASES.get(normalized, normalized)
 
 
 def validate_ticker(ticker: str) -> str:
@@ -107,14 +111,80 @@ def _build_chart_data_uri(history: pd.Series, ticker: str) -> str | None:
     return f"data:image/png;base64,{encoded}"
 
 
-def build_quote_response(raw_ticker: str, include_chart: bool = False) -> QuoteResponse:
+def _build_candlestick_chart_data_uri(history: pd.DataFrame, ticker: str) -> str | None:
+    if plt is None:
+        return None
+
+    ohlc = history[["Open", "High", "Low", "Close"]].astype(float)
+    x_values = np.arange(len(ohlc), dtype=float)
+
+    fig, ax = plt.subplots(figsize=(4.6, 1.8), dpi=160)
+    fig.patch.set_alpha(0)
+    ax.set_facecolor("none")
+
+    up_color = "#2563eb"
+    down_color = "#dc2626"
+    body_width = 0.56
+
+    for idx, row in zip(x_values, ohlc.to_numpy(dtype=float), strict=False):
+        open_price, high_price, low_price, close_price = row
+        color = up_color if close_price >= open_price else down_color
+        lower = min(open_price, close_price)
+        body_height = max(abs(close_price - open_price), 0.01)
+
+        ax.vlines(idx, low_price, high_price, color=color, linewidth=1.1, alpha=0.95)
+        ax.bar(
+            idx,
+            body_height,
+            bottom=lower,
+            width=body_width,
+            color=color,
+            edgecolor=color,
+            linewidth=0,
+            alpha=0.9,
+        )
+
+    ax.set_title(f"{ticker} candlestick view", fontsize=8, color="#475569")
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+    ax.margins(x=0.02)
+
+    buffer = io.BytesIO()
+    fig.savefig(buffer, format="png", bbox_inches="tight", pad_inches=0.08, transparent=True)
+    plt.close(fig)
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def normalize_chart_type(raw_chart_type: str | None) -> ChartType:
+    if raw_chart_type is None:
+        return "line"
+
+    chart_type = raw_chart_type.strip().lower()
+    if chart_type == "line":
+        return "line"
+    if chart_type == "candlestick":
+        return "candlestick"
+
+    raise ValueError("Invalid chart type. Use line or candlestick.")
+
+
+def build_quote_response(
+    raw_ticker: str,
+    include_chart: bool = False,
+    model_profile: str | None = None,
+    chart_type: str | None = None,
+) -> QuoteResponse:
     ticker = validate_ticker(normalize_ticker(raw_ticker))
+    selected_model_profile = normalize_model_profile(model_profile)
+    selected_chart_type = normalize_chart_type(chart_type)
     profile = _price_profile(ticker)
     history = get_close_history(ticker, length=HISTORY_LENGTH)
     latest_features = build_latest_features(history, annual_rate=DEFAULT_ANNUAL_RATE)
 
     technicals = TechnicalSnapshot(**asdict(latest_features))
-    bundle = load_model_bundle()
+    bundle = load_model_bundle(profile=selected_model_profile)
     model_prediction = predict_signal(bundle, latest_features)
 
     last_price = float(history.iloc[-1])
@@ -155,7 +225,18 @@ def build_quote_response(raw_ticker: str, include_chart: bool = False) -> QuoteR
         confidence=confidence,
         explanation=explanation,
         modelVersion=model_version,
+        selectedModelProfile=selected_model_profile,
+        selectedChartType=selected_chart_type,
         history=[round(value, 2) for value in history.tolist()],
         technicals=technicals,
-        chartDataUri=_build_chart_data_uri(history, ticker) if include_chart else None,
+        chartDataUri=(
+            _build_candlestick_chart_data_uri(
+                get_ohlc_history(ticker, length=HISTORY_LENGTH),
+                ticker,
+            )
+            if include_chart and selected_chart_type == "candlestick"
+            else _build_chart_data_uri(history, ticker)
+            if include_chart
+            else None
+        ),
     )

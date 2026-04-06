@@ -10,10 +10,15 @@ from typing import Any, Mapping
 import pandas as pd
 
 from .features import FEATURE_COLUMNS, LABEL_MAP, FeatureSnapshot, feature_snapshot_to_dict
-from .schemas import SignalLabel
+from .schemas import ModelProfile, SignalLabel
 
 DEFAULT_MODEL_FILENAME = "tradewise_model.pkl"
 DEFAULT_MODEL_ARTIFACT = Path(__file__).resolve().parents[2] / "artifacts" / DEFAULT_MODEL_FILENAME
+MODEL_PROFILE_ENV_VARS: dict[ModelProfile, str] = {
+    "safe": "ML_MODEL_ARTIFACT_SAFE",
+    "neutral": "ML_MODEL_ARTIFACT_NEUTRAL",
+    "risky": "ML_MODEL_ARTIFACT_RISKY",
+}
 
 
 @dataclass(frozen=True)
@@ -33,8 +38,23 @@ class ModelPrediction:
     model_version: str
 
 
-def get_model_artifact_path() -> Path:
-    configured_path = os.getenv("ML_MODEL_ARTIFACT")
+def normalize_model_profile(raw_profile: str | None) -> ModelProfile | None:
+    if raw_profile is None:
+        return None
+
+    profile = raw_profile.strip().lower()
+    if profile in MODEL_PROFILE_ENV_VARS:
+        return profile
+
+    raise ValueError("Invalid model profile. Use safe, neutral, or risky.")
+
+
+def get_model_artifact_path(profile: ModelProfile | None = None) -> Path:
+    configured_path = None
+    if profile is not None:
+        configured_path = os.getenv(MODEL_PROFILE_ENV_VARS[profile])
+    if not configured_path:
+        configured_path = os.getenv("ML_MODEL_ARTIFACT")
     if not configured_path:
         return DEFAULT_MODEL_ARTIFACT
 
@@ -55,8 +75,11 @@ def save_model_bundle(
     return artifact_path
 
 
-def load_model_bundle(path: Path | None = None) -> ModelBundle | None:
-    artifact_path = path or get_model_artifact_path()
+def load_model_bundle(
+    path: Path | None = None,
+    profile: ModelProfile | None = None,
+) -> ModelBundle | None:
+    artifact_path = path or get_model_artifact_path(profile=profile)
     if not artifact_path.exists():
         return None
 

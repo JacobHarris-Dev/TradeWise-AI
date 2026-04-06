@@ -97,12 +97,11 @@ function shutdown(exitCode = 0) {
   }, 300).unref();
 }
 
-function spawnService(command, args, cwd, env, spawnOptions = {}) {
+function spawnService(command, args, cwd, env) {
   const child = spawn(command, args, {
     cwd,
     env,
     stdio: "inherit",
-    ...spawnOptions,
   });
 
   child.on("exit", (code, signal) => {
@@ -116,21 +115,34 @@ function spawnService(command, args, cwd, env, spawnOptions = {}) {
     shutdown(code ?? 0);
   });
 
+  child.on("error", (error) => {
+    if (shuttingDown) {
+      return;
+    }
+
+    const detail =
+      options.serviceName === "backend"
+        ? `${getBackendStartupHelp(rootDir, backendDir)}\n\nOriginal error: ${error.message}`
+        : `Unable to start ${options.serviceName ?? "service"}.\n\nOriginal error: ${error.message}`;
+
+    console.error(detail);
+    shutdown(1);
+  });
+
   return child;
 }
 
 frontend = spawnService(
-  "npm",
+  npmCommand,
   ["run", "dev", "--", "--hostname", "127.0.0.1", "--port", frontendPort],
   frontendDir,
   frontendEnv,
-  // Windows: plain spawn("npm") gets ENOENT; shell finds npm.cmd on PATH.
-  { shell: isWin },
 );
 
 backend = spawnService(
-  backendPython,
+  backendPython.command,
   [
+    ...backendPython.args,
     "-m",
     "uvicorn",
     "tradewise_backend.main:app",
@@ -144,6 +156,7 @@ backend = spawnService(
   ],
   backendDir,
   backendEnv,
+  { serviceName: "backend" },
 );
 
 process.on("SIGINT", () => shutdown(0));

@@ -13,10 +13,19 @@ export async function proxyToMlBackend(
   const backendUrl = new URL(backendPath, getBackendBaseUrl());
   backendUrl.search = request.nextUrl.search;
 
+  const body =
+    request.method === "GET" || request.method === "HEAD"
+      ? undefined
+      : await request.text();
   const upstream = await fetch(backendUrl, {
+    method: request.method,
+    body,
     cache: "no-store",
     headers: {
       accept: "application/json",
+      ...(request.headers.get("content-type")
+        ? { "content-type": request.headers.get("content-type") as string }
+        : {}),
     },
   });
 

@@ -4,7 +4,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:frontend": "npm --prefix frontend run dev",
-    "dev:backend": "python3 -m uvicorn tradewise_backend.main:app --app-dir backend/src --host 127.0.0.1 --port 8000 --reload",
+    "dev:backend": "node scripts/dev-backend.mjs",
     "build": "npm --prefix frontend run build",
     "lint": "npm --prefix frontend run lint"
   }
