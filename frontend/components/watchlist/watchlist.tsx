@@ -101,18 +101,18 @@ export function Watchlist() {
 
   if (authLoading) {
     return (
-      <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading watchlist…</p>
+      <p className="text-sm text-zinc-500">Loading watchlist…</p>
     );
   }
 
   return (
-    <section className="rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
+    <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-        <h2 className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+        <h2 className="text-sm font-semibold text-zinc-800">
           Watchlist
         </h2>
         {!user ? (
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          <p className="text-xs text-zinc-500">
             Sign in to edit and sync your list.
           </p>
         ) : null}
@@ -128,7 +128,7 @@ export function Watchlist() {
               if (e.key === "Enter") void onAdd();
             }}
             placeholder="Ticker e.g. AAPL"
-            className="min-w-0 flex-1 rounded-lg border border-zinc-300 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100"
+            className="min-w-0 flex-1 rounded-lg border border-zinc-300 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400"
             autoCapitalize="characters"
             autoCorrect="off"
             spellCheck={false}
@@ -145,20 +145,20 @@ export function Watchlist() {
       ) : null}
 
       {error ? (
-        <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>
+        <p className="mt-2 text-sm text-red-600">{error}</p>
       ) : null}
 
       <ul className="mt-4 grid gap-3 sm:grid-cols-2">
         {quotesLoading ? (
-          <li className="text-sm text-zinc-500 dark:text-zinc-400">
+          <li className="text-sm text-zinc-500">
             Loading live quotes…
           </li>
         ) : quotesError ? (
-          <li className="text-sm text-red-600 dark:text-red-400">
+          <li className="text-sm text-red-600">
             {quotesError}
           </li>
         ) : displayTickers.length === 0 ? (
-          <li className="text-sm text-zinc-500 dark:text-zinc-400">
+          <li className="text-sm text-zinc-500">
             No tickers yet. Add symbols above.
           </li>
         ) : (

@@ -17,8 +17,8 @@ export function BrandWordmark({
     <span className="flex items-center gap-2.5">
       {showIcon ? <BrandIcon size={36} /> : null}
       <span className="text-lg font-semibold tracking-tight">
-        <span className="text-[#0f172a] dark:text-slate-100">Trade</span>
-        <span className="text-[#2563eb] dark:text-blue-400">Wise</span>
+        <span className="text-[#0f172a]">Trade</span>
+        <span className="text-[#2563eb]">Wise</span>
       </span>
     </span>
   );

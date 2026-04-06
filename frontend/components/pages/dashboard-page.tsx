@@ -21,12 +21,12 @@ export function DashboardPage() {
   })();
 
   return (
-    <div className="flex flex-col gap-8">
-      <section>
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+    <div className="flex flex-col gap-6">
+      <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">
           {welcomeLine}
         </h1>
-        <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+        <p className="mt-1 text-sm text-zinc-600">
           Track symbols, scan the market snapshot, and use Trade or Portfolio for
           the next steps.
         </p>
