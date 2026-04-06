@@ -44,20 +44,20 @@ export function MarketOverview() {
   }, []);
 
   return (
-    <section className="rounded-2xl border border-zinc-200 bg-zinc-50/80 p-5 dark:border-zinc-800 dark:bg-zinc-900/40">
-      <h2 className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+    <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+      <h2 className="text-sm font-semibold text-zinc-800">
         Market overview
       </h2>
-      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+      <p className="mt-1 text-xs text-zinc-500">
         Live quotes are loaded from the Python backend.
       </p>
 
       {loading ? (
-        <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="mt-4 text-sm text-zinc-500">
           Loading live market data…
         </p>
       ) : error ? (
-        <p className="mt-4 text-sm text-red-600 dark:text-red-400">{error}</p>
+        <p className="mt-4 text-sm text-red-600">{error}</p>
       ) : (
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           {quotes.map((quote) => (

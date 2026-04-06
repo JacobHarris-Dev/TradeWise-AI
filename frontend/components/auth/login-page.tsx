@@ -104,18 +104,18 @@ export function LoginPage() {
 
   return (
     <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-lg flex-col justify-center px-4 py-12">
-      <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm">
         <div className="mb-8 text-center">
           <Link
             href="/dashboard"
-            className="inline-block rounded-lg outline-none ring-offset-2 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-white dark:focus-visible:ring-offset-zinc-900"
+            className="inline-block rounded-lg outline-none ring-offset-2 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-white"
           >
             <BrandLogo priority />
           </Link>
-          <h1 className="mt-8 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+          <h1 className="mt-8 text-2xl font-semibold tracking-tight text-zinc-900">
             Sign in
           </h1>
-          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+          <p className="mt-1 text-sm text-zinc-600">
             Access your watchlist and saved data after you sign in.
           </p>
         </div>
@@ -124,7 +124,7 @@ export function LoginPage() {
           type="button"
           disabled={pending}
           onClick={() => void onGoogle()}
-          className="flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white py-2.5 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100 dark:hover:bg-zinc-800"
+          className="flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white py-2.5 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:opacity-60"
         >
           <svg className="h-5 w-5" viewBox="0 0 24 24" aria-hidden>
             <path
@@ -149,16 +149,14 @@ export function LoginPage() {
 
         <div className="relative my-6">
           <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-zinc-200 dark:border-zinc-700" />
+            <div className="w-full border-t border-zinc-200" />
           </div>
           <div className="relative flex justify-center text-xs uppercase">
-            <span className="bg-white px-2 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
-              Or email
-            </span>
+            <span className="bg-white px-2 text-zinc-500">Or email</span>
           </div>
         </div>
 
-        <div className="mb-4 flex rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800">
+        <div className="mb-4 flex rounded-lg bg-zinc-100 p-1">
           <button
             type="button"
             onClick={() => {
@@ -167,8 +165,8 @@ export function LoginPage() {
             }}
             className={`flex-1 rounded-md py-2 text-sm font-medium transition ${
               mode === "signin"
-                ? "bg-white text-zinc-900 shadow dark:bg-zinc-950 dark:text-zinc-50"
-                : "text-zinc-600 dark:text-zinc-400"
+                ? "bg-white text-zinc-900 shadow"
+                : "text-zinc-600"
             }`}
           >
             Sign in
@@ -181,8 +179,8 @@ export function LoginPage() {
             }}
             className={`flex-1 rounded-md py-2 text-sm font-medium transition ${
               mode === "signup"
-                ? "bg-white text-zinc-900 shadow dark:bg-zinc-950 dark:text-zinc-50"
-                : "text-zinc-600 dark:text-zinc-400"
+                ? "bg-white text-zinc-900 shadow"
+                : "text-zinc-600"
             }`}
           >
             Create account
@@ -190,7 +188,7 @@ export function LoginPage() {
         </div>
 
         <form onSubmit={(e) => void onEmailSubmit(e)} className="flex flex-col gap-3">
-          <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
+          <label className="text-xs font-medium text-zinc-600">
             Email
             <input
               type="email"
@@ -198,10 +196,10 @@ export function LoginPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
+              className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900"
             />
           </label>
-          <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
+          <label className="text-xs font-medium text-zinc-600">
             Password
             <input
               type="password"
@@ -212,16 +210,16 @@ export function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
               minLength={6}
-              className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-100"
+              className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900"
             />
           </label>
           {error ? (
-            <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+            <p className="text-sm text-red-600">{error}</p>
           ) : null}
           <button
             type="submit"
             disabled={pending}
-            className="mt-1 rounded-lg bg-zinc-900 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+            className="mt-1 rounded-lg bg-zinc-900 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-60"
           >
             {pending
               ? "Working…"
@@ -231,10 +229,10 @@ export function LoginPage() {
           </button>
         </form>
 
-        <p className="mt-6 text-center text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="mt-6 text-center text-sm text-zinc-500">
           <Link
             href="/dashboard"
-            className="font-medium text-zinc-700 underline dark:text-zinc-300"
+            className="font-medium text-zinc-700 underline"
           >
             Continue to dashboard
           </Link>{" "}

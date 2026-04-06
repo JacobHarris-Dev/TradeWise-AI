@@ -12,10 +12,11 @@
   --font-mono: var(--font-geist-mono);
 }
 
+/* Keep the app on a light canvas even when the OS prefers dark mode (FinTech UI). */
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #f4f5f7;
+    --foreground: #18181b;
   }
 }
 

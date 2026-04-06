@@ -30,30 +30,30 @@ export function StockCard({
 
   const changeColor =
     changePercent > 0
-      ? "text-emerald-600 dark:text-emerald-400"
+      ? "text-emerald-600"
       : changePercent < 0
-        ? "text-red-600 dark:text-red-400"
+        ? "text-red-600"
         : "text-zinc-500";
 
   return (
     <article
-      className={`rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900 ${
+      className={`rounded-xl border border-zinc-200 bg-white ${
         compact ? "px-3 py-2" : "px-4 py-3"
       }`}
     >
       <div className="flex items-start justify-between gap-2">
         <div>
-          <p className="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+          <p className="font-mono text-sm font-semibold text-zinc-900">
             {ticker}
           </p>
           {!compact && companyName ? (
-            <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500 dark:text-zinc-400">
+            <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500">
               {companyName}
             </p>
           ) : null}
         </div>
         <div className="text-right">
-          <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+          <p className="text-sm font-medium text-zinc-900">
             ${lastPrice.toFixed(2)}
           </p>
           <p className={`text-xs font-medium ${changeColor}`}>
