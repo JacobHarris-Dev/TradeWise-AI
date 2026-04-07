@@ -1,32 +1,19 @@
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import {
+  getBackendStartupHelp,
+  getNpmCommand,
+  resolveBackendPython,
+} from "./dev-utils.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const frontendDir = join(rootDir, "frontend");
 const backendDir = join(rootDir, "backend");
-
 const isWin = process.platform === "win32";
-const backendVenvPython = isWin
-  ? join(backendDir, ".venv", "Scripts", "python.exe")
-  : join(backendDir, ".venv", "bin", "python");
-const backendPython = existsSync(backendVenvPython)
-  ? { command: backendVenvPython, args: [] }
-  : isWin
-    ? { command: "python", args: [] }
-    : { command: "python3", args: [] };
-const npmCommand = "npm";
-
-function getBackendStartupHelp(rootPath, backendPath) {
-  return [
-    "Unable to start backend service.",
-    `Workspace root: ${rootPath}`,
-    `Backend dir: ${backendPath}`,
-    "Ensure backend dependencies are installed and Python is available.",
-  ].join("\n");
-}
-
+const backendPython = resolveBackendPython(rootDir, backendDir);
+const npmCommand = getNpmCommand();
 
 function loadEnvFile(envPath) {
   if (!existsSync(envPath)) {
@@ -53,6 +40,7 @@ function loadEnvFile(envPath) {
     if (isSingleQuoted || isDoubleQuoted) {
       value = value.slice(1, -1);
     }
+
     loaded[match[1]] = value;
   }
 
@@ -95,9 +83,11 @@ function shutdown(exitCode = 0) {
     return;
   }
   shuttingDown = true;
+
   try {
     frontend?.kill("SIGTERM");
   } catch {}
+
   try {
     backend?.kill("SIGTERM");
   } catch {}
@@ -112,7 +102,7 @@ function spawnService(command, args, cwd, env, options = {}) {
     cwd,
     env,
     stdio: "inherit",
-    ...(options.spawnOptions ?? {}),
+    shell: options.shell ?? false,
   });
 
   child.on("exit", (code, signal) => {
@@ -148,8 +138,11 @@ frontend = spawnService(
   ["run", "dev", "--", "--hostname", "127.0.0.1", "--port", frontendPort],
   frontendDir,
   frontendEnv,
-  // Windows: plain spawn("npm") gets ENOENT; shell finds npm.cmd on PATH.
-  { spawnOptions: { shell: isWin }, serviceName: "frontend" },
+  {
+    // On Windows, use shell to resolve npm.cmd from PATH.
+    shell: isWin,
+    serviceName: "frontend",
+  },
 );
 
 backend = spawnService(
