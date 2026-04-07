@@ -7,7 +7,6 @@ import { BrandLogo } from "@/components/brand/brand-logo";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
   signInWithEmailPassword,
-  signInWithGooglePopup,
   signUpWithEmailPassword,
 } from "@/lib/auth";
 

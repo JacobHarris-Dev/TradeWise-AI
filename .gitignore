@@ -51,6 +51,7 @@ venv/
 env/
 backend/.venv/
 backend/venv/
+backend/venv311/
 backend/env/
 
 # debug

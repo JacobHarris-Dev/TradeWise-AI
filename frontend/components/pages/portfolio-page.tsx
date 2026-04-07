@@ -1,15 +1,99 @@
 "use client";
 
+import dynamic from "next/dynamic";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AiDisclaimer } from "@/components/layout/ai-disclaimer";
-import { MOCK_HOLDINGS, getMockStockQuote } from "@/lib/mocks/stock-data";
 import { HoldingCard } from "@/components/portfolio/holding-card";
-import { PortfolioAllocationChart } from "@/components/portfolio/portfolio-allocation-chart";
-import { PortfolioGrowthChart } from "@/components/portfolio/portfolio-growth-chart";
+import { useAuth } from "@/components/providers/auth-provider";
+import type { PaperAccountPerformance } from "@/lib/mocks/stock-data";
+import { fetchPaperAccountPerformance } from "@/lib/stock-quote";
+
+const PortfolioAllocationChart = dynamic(
+  () =>
+    import("@/components/portfolio/portfolio-allocation-chart").then(
+      (mod) => mod.PortfolioAllocationChart,
+    ),
+  { ssr: false },
+);
+
+const PortfolioGrowthChart = dynamic(
+  () =>
+    import("@/components/portfolio/portfolio-growth-chart").then(
+      (mod) => mod.PortfolioGrowthChart,
+    ),
+  { ssr: false },
+);
+
+const PORTFOLIO_REFRESH_MS = 30000;
 
 /**
- * Portfolio: growth chart, allocation donut, and holdings — mock data for hackathon demo.
+ * Portfolio: live paper-account holdings linked to the Trade tab.
  */
 export function PortfolioPage() {
+  const { user } = useAuth();
+  const accountUserId = user?.uid ?? "guest";
+  const [portfolio, setPortfolio] = useState<PaperAccountPerformance | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refreshAccount = useCallback(
+    async (options: { background?: boolean } = {}) => {
+      if (!options.background) {
+        setLoading(true);
+      }
+
+      try {
+        const next = await fetchPaperAccountPerformance(accountUserId);
+        setPortfolio(next);
+        setError(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not load portfolio.");
+      } finally {
+        if (!options.background) {
+          setLoading(false);
+        }
+      }
+    },
+    [accountUserId],
+  );
+
+  useEffect(() => {
+    void refreshAccount();
+  }, [refreshAccount]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void refreshAccount({ background: true });
+    }, PORTFOLIO_REFRESH_MS);
+
+    return () => window.clearInterval(timer);
+  }, [refreshAccount]);
+
+  const positionRows = useMemo(
+    () => portfolio?.positions ?? [],
+    [portfolio],
+  );
+
+  const allocationRows = useMemo(() => {
+    if (!portfolio) {
+      return [];
+    }
+
+    const rows = positionRows.map((position) => ({
+      ticker: position.ticker,
+      value: position.marketValue,
+    }));
+
+    if (portfolio.cash > 0) {
+      rows.unshift({
+        ticker: "Cash",
+        value: portfolio.cash,
+      });
+    }
+
+    return rows;
+  }, [portfolio, positionRows]);
+
   return (
     <div className="space-y-6">
       <div>
@@ -17,54 +101,116 @@ export function PortfolioPage() {
           Portfolio
         </h1>
         <p className="mt-1 text-sm text-zinc-500">
-          Demo data — charts are interactive; swap in live balances when you connect an API.
+          Linked to paper trades for{" "}
+          {accountUserId === "guest" ? "guest mode" : "your signed-in account"}.
         </p>
       </div>
 
-      <ul className="flex max-w-lg flex-col gap-3">
-        {MOCK_HOLDINGS.map((h) => {
-          const q = getMockStockQuote(h.ticker);
-          const est = (q.lastPrice * h.shares).toFixed(2);
-          return (
-            <li key={h.ticker}>
-              <HoldingCard
-                ticker={h.ticker}
-                shares={h.shares}
-                valueDisplay={`$${est} (mock)`}
-              />
-            </li>
-          );
-        })}
-      </ul>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <article className="rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm">
+          <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">Cash</p>
+          <p className="mt-1 text-lg font-semibold text-zinc-900">
+            ${portfolio ? portfolio.cash.toFixed(2) : "0.00"}
+          </p>
+        </article>
+        <article className="rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm">
+          <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">Positions Value</p>
+          <p className="mt-1 text-lg font-semibold text-zinc-900">
+            ${portfolio ? portfolio.positionsValue.toFixed(2) : "0.00"}
+          </p>
+        </article>
+        <article className="rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm">
+          <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">Total Equity</p>
+          <p className="mt-1 text-lg font-semibold text-zinc-900">
+            ${portfolio ? portfolio.totalEquity.toFixed(2) : "0.00"}
+          </p>
+        </article>
+        <article className="rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm">
+          <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">Day Return</p>
+          <p
+            className={`mt-1 text-lg font-semibold ${
+              (portfolio?.dayChange ?? 0) >= 0 ? "text-emerald-600" : "text-red-600"
+            }`}
+          >
+            {portfolio
+              ? `${portfolio.dayChange >= 0 ? "+" : "-"}$${Math.abs(portfolio.dayChange).toFixed(2)}`
+              : "$0.00"}
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">
+            {portfolio ? `${portfolio.dayChangePercent >= 0 ? "+" : "-"}${Math.abs(portfolio.dayChangePercent).toFixed(2)}%` : "0.00%"}
+          </p>
+        </article>
+      </div>
 
-      <AiDisclaimer />
-      <PortfolioGrowthChart />
+      <PortfolioGrowthChart
+        totalValue={portfolio?.totalEquity ?? portfolio?.cash ?? 0}
+        title="Total paper account value"
+        points={portfolio?.points}
+        dayChange={portfolio?.dayChange}
+        dayChangePercent={portfolio?.dayChangePercent}
+        updatedAt={portfolio?.updatedAt}
+      />
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <PortfolioAllocationChart />
+        <PortfolioAllocationChart
+          positions={allocationRows}
+          description="Cash and open positions in your paper account"
+        />
 
         <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
-          <h2 className="text-lg font-semibold text-zinc-900">Holdings</h2>
-          <p className="mt-0.5 text-sm text-zinc-500">
-            {MOCK_HOLDINGS.length} position{MOCK_HOLDINGS.length === 1 ? "" : "s"}
-          </p>
-          <ul className="mt-4 flex flex-col gap-3">
-            {MOCK_HOLDINGS.map((h) => {
-              const q = getMockStockQuote(h.ticker);
-              const est = (q.lastPrice * h.shares).toFixed(2);
-              return (
-                <li key={h.ticker}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold text-zinc-900">Holdings</h2>
+              <p className="mt-0.5 text-sm text-zinc-500">
+                {portfolio?.positions.length ?? 0} position
+                {(portfolio?.positions.length ?? 0) === 1 ? "" : "s"}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void refreshAccount()}
+              className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
+            >
+              Refresh
+            </button>
+          </div>
+          {portfolio?.updatedAt ? (
+            <p className="mt-2 text-xs text-zinc-500">
+              Last updated {new Date(portfolio.updatedAt).toLocaleTimeString()}
+            </p>
+          ) : null}
+
+          {error ? (
+            <p className="mt-3 text-sm text-red-600">{error}</p>
+          ) : null}
+          {loading ? (
+            <p className="mt-3 text-sm text-zinc-500">Loading portfolio...</p>
+          ) : null}
+
+          {!loading && positionRows.length ? (
+            <ul className="mt-4 flex flex-col gap-3">
+              {positionRows.map((position) => (
+                <li key={position.ticker}>
                   <HoldingCard
-                    ticker={h.ticker}
-                    shares={h.shares}
-                    valueDisplay={`$${est}`}
+                    ticker={position.ticker}
+                    shares={position.shares}
+                    valueDisplay={`$${position.marketValue.toFixed(2)}`}
                   />
                 </li>
-              );
-            })}
-          </ul>
+              ))}
+            </ul>
+          ) : !loading ? (
+            <div className="mt-4 rounded-xl border border-dashed border-zinc-200 bg-zinc-50 px-4 py-6">
+              <p className="text-sm text-zinc-600">
+                No open paper positions yet. Your cash is still being tracked above,
+                and the charts stay visible while you wait for the first buy.
+              </p>
+            </div>
+          ) : null}
         </div>
       </div>
+
+      <AiDisclaimer />
     </div>
   );
 }

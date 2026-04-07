@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+import os
+from threading import Lock
 
 try:
     import yfinance as yf
@@ -70,6 +72,8 @@ TOPIC_KEYWORDS = {
     "deals": ("partnership", "acquisition", "deal", "contract"),
 }
 
+DEFAULT_NEWS_REFRESH_SECONDS = 90
+
 
 @dataclass(frozen=True)
 class NewsArticle:
@@ -86,6 +90,33 @@ class NewsContext:
     topics: tuple[str, ...]
     headlines: tuple[str, ...]
     article_count: int
+
+
+@dataclass(frozen=True)
+class NewsContextSnapshot:
+    context: NewsContext | None
+    fetched_at: datetime
+    from_cache: bool
+    refresh_seconds: int
+
+
+@dataclass(frozen=True)
+class _CachedNewsContext:
+    context: NewsContext | None
+    fetched_at: datetime
+
+
+_NEWS_CONTEXT_CACHE: dict[str, _CachedNewsContext] = {}
+_NEWS_CONTEXT_CACHE_LOCK = Lock()
+
+
+def _configured_news_refresh_seconds() -> int:
+    raw_value = os.getenv("ML_NEWS_REFRESH_SECONDS", str(DEFAULT_NEWS_REFRESH_SECONDS)).strip()
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return DEFAULT_NEWS_REFRESH_SECONDS
+    return max(0, value)
 
 
 def _coerce_datetime(value: object) -> datetime | None:
@@ -215,9 +246,58 @@ def extract_news_topics(articles: list[NewsArticle], max_topics: int = 3) -> tup
 def build_news_context(
     ticker: str,
     limit: int = 6,
+    refresh_seconds: int | None = None,
+    force_refresh: bool = False,
 ) -> NewsContext | None:
-    articles = fetch_recent_news(ticker, limit=limit)
-    return _build_news_context_from_articles(articles)
+    return build_news_context_snapshot(
+        ticker,
+        limit=limit,
+        refresh_seconds=refresh_seconds,
+        force_refresh=force_refresh,
+    ).context
+
+
+def build_news_context_snapshot(
+    ticker: str,
+    limit: int = 6,
+    refresh_seconds: int | None = None,
+    force_refresh: bool = False,
+) -> NewsContextSnapshot:
+    normalized_ticker = validate_ticker(normalize_ticker(ticker))
+    resolved_refresh_seconds = _configured_news_refresh_seconds() if refresh_seconds is None else max(0, refresh_seconds)
+    now = datetime.now(tz=UTC)
+
+    with _NEWS_CONTEXT_CACHE_LOCK:
+        cached = _NEWS_CONTEXT_CACHE.get(normalized_ticker)
+        if (
+            not force_refresh
+            and cached is not None
+            and resolved_refresh_seconds > 0
+            and (now - cached.fetched_at).total_seconds() < resolved_refresh_seconds
+        ):
+            return NewsContextSnapshot(
+                context=cached.context,
+                fetched_at=cached.fetched_at,
+                from_cache=True,
+                refresh_seconds=resolved_refresh_seconds,
+            )
+
+    articles = fetch_recent_news(normalized_ticker, limit=limit)
+    context = _build_news_context_from_articles(articles)
+    fetched_at = datetime.now(tz=UTC)
+
+    with _NEWS_CONTEXT_CACHE_LOCK:
+        _NEWS_CONTEXT_CACHE[normalized_ticker] = _CachedNewsContext(
+            context=context,
+            fetched_at=fetched_at,
+        )
+
+    return NewsContextSnapshot(
+        context=context,
+        fetched_at=fetched_at,
+        from_cache=False,
+        refresh_seconds=resolved_refresh_seconds,
+    )
 
 
 def build_news_context_for_date(

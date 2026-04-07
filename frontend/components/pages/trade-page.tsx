@@ -1,21 +1,38 @@
 "use client";
 
 import Image from "next/image";
-import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AiDisclaimer } from "@/components/layout/ai-disclaimer";
+import { useAuth } from "@/components/providers/auth-provider";
 import { getMlBackendWebSocketUrl } from "@/lib/ml/backend-ws";
 import { LiveLineChart } from "@/components/stock/live-line-chart";
 import { StockCard } from "@/components/stock/stock-card";
 import type {
   AutoTradeResult,
-  ChartType,
   LiveTradeTick,
   MockQuote,
   MockTradingDay,
   ModelProfile,
+  NewsReport,
+  PaperAccount,
   RefreshCadence,
 } from "@/lib/mocks/stock-data";
-import { executeAutoTrade, fetchMockTradingDay, fetchStockQuote } from "@/lib/stock-quote";
+import {
+  executeAutoTradeBatch,
+  fetchNewsReport,
+  fetchMockTradingDay,
+  fetchPaperAccount,
+  fetchStockQuote,
+} from "@/lib/stock-quote";
+import {
+  isTradeWorkspaceFresh,
+  MAX_TRACKED_TICKERS,
+  readStoredJson,
+  readTradeWorkspace,
+  TRADE_STORAGE_KEYS,
+  writeTradeWorkspace,
+} from "@/lib/trade-workspace";
 
 const SIGNAL_BADGES = {
   bullish:
@@ -53,14 +70,6 @@ const MODEL_PROFILE_LABELS: Record<ModelProfile, string> = {
   safe: "Safe",
   neutral: "Neutral",
   risky: "Risky",
-} as const;
-
-const STORAGE_KEYS = {
-  tradeMode: "tradewise.tradeMode",
-  modelProfile: "tradewise.modelProfile",
-  chartType: "tradewise.chartType",
-  refreshCadence: "tradewise.refreshCadence",
-  autoTradeEnabled: "tradewise.autoTradeEnabled",
 } as const;
 const CADENCE_LABELS: Record<RefreshCadence, string> = {
   "1m": "1 minute",
@@ -118,14 +127,16 @@ function InfoHint({ label: _label }: { label: string }) {
  * model-run modes.
  */
 export function TradePage() {
-  const [tickerInput, setTickerInput] = useState("AAPL");
-  const [quote, setQuote] = useState<MockQuote | null>(null);
+  const { user } = useAuth();
+  const accountUserId = user?.uid ?? "guest";
+  const [trackedTickers, setTrackedTickers] = useState<string[]>(["AAPL"]);
+  const [selectedTicker, setSelectedTicker] = useState("AAPL");
+  const [quotesByTicker, setQuotesByTicker] = useState<Record<string, MockQuote>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastAction, setLastAction] = useState<string | null>(null);
   const [tradeMode, setTradeMode] = useState<TradeMode>("manual");
   const [modelProfile, setModelProfile] = useState<ModelProfile>("neutral");
-  const [chartType, setChartType] = useState<ChartType>("line");
   const [refreshCadence, setRefreshCadence] = useState<RefreshCadence>("1m");
   const [autoTradeEnabled, setAutoTradeEnabled] = useState(false);
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
@@ -136,10 +147,19 @@ export function TradePage() {
   const [paperTradeLog, setPaperTradeLog] = useState<PaperTradeLogEntry[]>([]);
   const [autoTradeLoading, setAutoTradeLoading] = useState(false);
   const [autoTradeError, setAutoTradeError] = useState<string | null>(null);
+  const [newsReportsByTicker, setNewsReportsByTicker] = useState<Record<string, NewsReport>>({});
+  const [newsReportLoading, setNewsReportLoading] = useState(false);
+  const [newsReportError, setNewsReportError] = useState<string | null>(null);
+  const [paperAccount, setPaperAccount] = useState<PaperAccount | null>(null);
+  const [paperAccountLoading, setPaperAccountLoading] = useState(false);
+  const [paperAccountError, setPaperAccountError] = useState<string | null>(null);
   const [streamConnected, setStreamConnected] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [lastTickAt, setLastTickAt] = useState<string | null>(null);
   const [clock, setClock] = useState(() => new Date());
+  const skipInitialQuotesRefreshRef = useRef(false);
+  const skipInitialPaperAccountRefreshRef = useRef(false);
+  const skipInitialNewsRefreshRef = useRef(false);
   const currentTime = new Intl.DateTimeFormat("en-US", {
     weekday: "short",
     hour: "numeric",
@@ -148,22 +168,77 @@ export function TradePage() {
     timeZoneName: "short",
   }).format(clock);
   const marketSnapshot = getEasternMarketSnapshot(clock);
+  const newsRefreshSeconds = Math.max(30, Math.floor(CADENCE_MS[refreshCadence] / 1000));
+  const quote = selectedTicker ? quotesByTicker[selectedTicker] ?? null : null;
+  const newsReport = selectedTicker ? newsReportsByTicker[selectedTicker] ?? null : null;
 
   useEffect(() => {
-    const storedTradeMode = window.localStorage.getItem(STORAGE_KEYS.tradeMode);
-    const storedModelProfile = window.localStorage.getItem(
-      STORAGE_KEYS.modelProfile,
+    const storedTradeMode = window.localStorage.getItem(TRADE_STORAGE_KEYS.tradeMode);
+    const storedTrackedTickers = readStoredJson<string[]>(
+      TRADE_STORAGE_KEYS.trackedTickers,
     );
-    const storedChartType = window.localStorage.getItem(STORAGE_KEYS.chartType);
+    const storedModelProfile = window.localStorage.getItem(
+      TRADE_STORAGE_KEYS.modelProfile,
+    );
     const storedRefreshCadence = window.localStorage.getItem(
-      STORAGE_KEYS.refreshCadence,
+      TRADE_STORAGE_KEYS.refreshCadence,
     );
     const storedAutoTradeEnabled = window.localStorage.getItem(
-      STORAGE_KEYS.autoTradeEnabled,
+      TRADE_STORAGE_KEYS.autoTradeEnabled,
     );
+    const workspace = readTradeWorkspace();
+    const workspaceFresh = isTradeWorkspaceFresh(workspace);
 
     if (storedTradeMode === "manual" || storedTradeMode === "model") {
       setTradeMode(storedTradeMode);
+    }
+
+    if (workspace) {
+      const nextTickers = Array.from(
+        new Set(
+          workspace.trackedTickers
+            .map((value) => value.trim().toUpperCase())
+            .filter(Boolean),
+        ),
+      ).slice(0, MAX_TRACKED_TICKERS);
+
+      if (nextTickers.length) {
+        const nextSelectedTicker =
+          nextTickers.includes(workspace.selectedTicker)
+            ? workspace.selectedTicker
+            : nextTickers[0];
+        setTrackedTickers(nextTickers);
+        setSelectedTicker(nextSelectedTicker);
+        setQuotesByTicker(workspace.quotesByTicker ?? {});
+        setNewsReportsByTicker(workspace.newsReportsByTicker ?? {});
+        setPaperAccount(workspace.paperAccount ?? null);
+        setAutoTradeResult(workspace.autoTradeResult ?? null);
+        setLastAction(workspace.lastAction ?? null);
+        skipInitialQuotesRefreshRef.current =
+          workspaceFresh &&
+          nextTickers.every((ticker) => Boolean(workspace.quotesByTicker?.[ticker]));
+        skipInitialPaperAccountRefreshRef.current =
+          workspaceFresh && Boolean(workspace.paperAccount);
+        skipInitialNewsRefreshRef.current =
+          workspaceFresh &&
+          Boolean(nextSelectedTicker) &&
+          Boolean(workspace.newsReportsByTicker?.[nextSelectedTicker]);
+      }
+    } else if (storedTrackedTickers && Array.isArray(storedTrackedTickers)) {
+      const nextTickers = Array.from(
+        new Set(
+          storedTrackedTickers
+            .map((value) =>
+              typeof value === "string" ? value.trim().toUpperCase() : "",
+            )
+            .filter(Boolean),
+        ),
+      ).slice(0, MAX_TRACKED_TICKERS);
+
+      if (nextTickers.length) {
+        setTrackedTickers(nextTickers);
+        setSelectedTicker(nextTickers[0]);
+      }
     }
 
     if (
@@ -172,10 +247,6 @@ export function TradePage() {
       storedModelProfile === "risky"
     ) {
       setModelProfile(storedModelProfile);
-    }
-
-    if (storedChartType === "line" || storedChartType === "candlestick") {
-      setChartType(storedChartType);
     }
 
     if (
@@ -198,20 +269,23 @@ export function TradePage() {
       return;
     }
 
-    window.localStorage.setItem(STORAGE_KEYS.tradeMode, tradeMode);
-    window.localStorage.setItem(STORAGE_KEYS.modelProfile, modelProfile);
-    window.localStorage.setItem(STORAGE_KEYS.chartType, chartType);
-    window.localStorage.setItem(STORAGE_KEYS.refreshCadence, refreshCadence);
+    window.localStorage.setItem(TRADE_STORAGE_KEYS.tradeMode, tradeMode);
     window.localStorage.setItem(
-      STORAGE_KEYS.autoTradeEnabled,
+      TRADE_STORAGE_KEYS.trackedTickers,
+      JSON.stringify(trackedTickers),
+    );
+    window.localStorage.setItem(TRADE_STORAGE_KEYS.modelProfile, modelProfile);
+    window.localStorage.setItem(TRADE_STORAGE_KEYS.refreshCadence, refreshCadence);
+    window.localStorage.setItem(
+      TRADE_STORAGE_KEYS.autoTradeEnabled,
       String(autoTradeEnabled),
     );
   }, [
     autoTradeEnabled,
-    chartType,
     modelProfile,
     preferencesLoaded,
     refreshCadence,
+    trackedTickers,
     tradeMode,
   ]);
 
@@ -223,32 +297,223 @@ export function TradePage() {
     return () => window.clearInterval(timer);
   }, []);
 
-  const loadQuote = useCallback(async () => {
-    const raw = tickerInput.trim();
-    if (!raw) {
-      setError("Enter a ticker symbol.");
+  const refreshPaperAccount = useCallback(
+    async (showLoading = false) => {
+      if (showLoading) {
+        setPaperAccountLoading(true);
+      }
+      try {
+        const account = await fetchPaperAccount(accountUserId);
+        setPaperAccount(account);
+        setPaperAccountError(null);
+      } catch (err) {
+        setPaperAccountError(
+          err instanceof Error ? err.message : "Could not load paper account.",
+        );
+      } finally {
+        if (showLoading) {
+          setPaperAccountLoading(false);
+        }
+      }
+    },
+    [accountUserId],
+  );
+
+  useEffect(() => {
+    if (!preferencesLoaded) {
+      return;
+    }
+    if (skipInitialPaperAccountRefreshRef.current) {
+      skipInitialPaperAccountRefreshRef.current = false;
+      return;
+    }
+    void refreshPaperAccount(true);
+  }, [preferencesLoaded, refreshPaperAccount]);
+
+  useEffect(() => {
+    if (!preferencesLoaded) {
+      return;
+    }
+
+    writeTradeWorkspace({
+      savedAt: Date.now(),
+      trackedTickers,
+      selectedTicker,
+      quotesByTicker,
+      newsReportsByTicker,
+      paperAccount,
+      autoTradeResult,
+      lastAction,
+    });
+  }, [
+    autoTradeResult,
+    lastAction,
+    newsReportsByTicker,
+    paperAccount,
+    preferencesLoaded,
+    quotesByTicker,
+    selectedTicker,
+    trackedTickers,
+  ]);
+
+  const loadTrackedQuotes = useCallback(
+    async (
+      targetTickers: string[],
+      options: { showLoading?: boolean } = {},
+    ) => {
+      const symbols = Array.from(
+        new Set(targetTickers.map((ticker) => ticker.trim().toUpperCase()).filter(Boolean)),
+      );
+      if (!symbols.length) {
+        return;
+      }
+
+      if (options.showLoading) {
+        setLoading(true);
+      }
+
+      try {
+        const results = await Promise.allSettled(
+          symbols.map((ticker) =>
+            fetchStockQuote(ticker, { modelProfile }),
+          ),
+        );
+        const nextQuotes: MockQuote[] = [];
+        const failures: string[] = [];
+
+        for (const [index, result] of results.entries()) {
+          if (result.status === "fulfilled") {
+            nextQuotes.push(result.value);
+          } else {
+            const reason =
+              result.reason instanceof Error
+                ? result.reason.message
+                : "Could not load quote.";
+            failures.push(`${symbols[index]}: ${reason}`);
+          }
+        }
+
+        if (nextQuotes.length) {
+          setQuotesByTicker((current) => {
+            const merged = { ...current };
+            for (const nextQuote of nextQuotes) {
+              merged[nextQuote.ticker] = nextQuote;
+            }
+            return merged;
+          });
+        }
+
+        setError(failures.length ? failures.join(" ") : null);
+      } finally {
+        if (options.showLoading) {
+          setLoading(false);
+        }
+      }
+    },
+    [modelProfile],
+  );
+
+  useEffect(() => {
+    if (!preferencesLoaded || !trackedTickers.length) {
+      return;
+    }
+
+    if (skipInitialQuotesRefreshRef.current) {
+      skipInitialQuotesRefreshRef.current = false;
+      return;
+    }
+
+    void loadTrackedQuotes(trackedTickers, { showLoading: true });
+  }, [loadTrackedQuotes, preferencesLoaded, trackedTickers]);
+
+  const checkSelectedStocks = useCallback(async () => {
+    if (!trackedTickers.length) {
+      setError("Load starter stocks from the dashboard first.");
       return;
     }
 
     setError(null);
     setLastAction(null);
-    setLoading(true);
+    setMockTradingDay(null);
+    setMockTradingError(null);
+    await loadTrackedQuotes(trackedTickers, { showLoading: true });
+  }, [loadTrackedQuotes, trackedTickers]);
 
-    try {
-      const nextQuote = await fetchStockQuote(raw, { modelProfile, chartType });
-      setQuote(nextQuote);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load quote.");
-      setQuote(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [chartType, modelProfile, tickerInput]);
+  const selectTrackedTicker = useCallback((ticker: string) => {
+    setSelectedTicker(ticker);
+    setLastAction(null);
+    setMockTradingDay(null);
+    setMockTradingError(null);
+  }, []);
+
+  const removeTrackedTicker = useCallback(
+    (ticker: string) => {
+      setTrackedTickers((current) => current.filter((entry) => entry !== ticker));
+      setQuotesByTicker((current) => {
+        const next = { ...current };
+        delete next[ticker];
+        return next;
+      });
+      setNewsReportsByTicker((current) => {
+        const next = { ...current };
+        delete next[ticker];
+        return next;
+      });
+      setPaperTradeLog((current) =>
+        current.filter((entry) => entry.ticker !== ticker),
+      );
+
+      if (selectedTicker === ticker) {
+        const remainingTickers = trackedTickers.filter((entry) => entry !== ticker);
+        const nextSelected = remainingTickers[0] ?? "";
+        setSelectedTicker(nextSelected);
+        setAutoTradeResult((current) =>
+          current?.ticker === ticker ? null : current,
+        );
+        setMockTradingDay(null);
+      }
+    },
+    [selectedTicker, trackedTickers],
+  );
+
+  const loadNewsReport = useCallback(
+    async (options: { forceRefresh?: boolean; showLoading?: boolean } = {}) => {
+      const raw = selectedTicker || trackedTickers[0] || "";
+      if (!raw) {
+        return;
+      }
+
+      if (options.showLoading) {
+        setNewsReportLoading(true);
+      }
+
+      try {
+        const report = await fetchNewsReport(raw, {
+          modelProfile,
+          refreshSeconds: newsRefreshSeconds,
+          forceRefresh: options.forceRefresh,
+        });
+        setNewsReportsByTicker((current) => ({
+          ...current,
+          [report.ticker]: report,
+        }));
+        setNewsReportError(null);
+      } catch (err) {
+        setNewsReportError(
+          err instanceof Error ? err.message : "Could not load news report.",
+        );
+      } finally {
+        if (options.showLoading) {
+          setNewsReportLoading(false);
+        }
+      }
+    },
+    [modelProfile, newsRefreshSeconds, selectedTicker, trackedTickers],
+  );
 
   const runAutoTrade = useCallback(async () => {
-    const raw = tickerInput.trim();
-    if (!raw) {
-      setAutoTradeError("Enter a ticker symbol.");
+    if (!trackedTickers.length) {
+      setAutoTradeError("Add at least one ticker to start paper trading.");
       return;
     }
 
@@ -256,27 +521,51 @@ export function TradePage() {
     setAutoTradeLoading(true);
 
     try {
-      const result = await executeAutoTrade(raw, {
+      const successfulResults = await executeAutoTradeBatch(trackedTickers, {
         modelProfile,
         cadence: refreshCadence,
+        userId: accountUserId,
       });
-      setAutoTradeResult(result);
-      setQuote(result.quote);
-      setLastAction(result.statusMessage);
-      setPaperTradeLog((current) => [
-        {
-          id: `${Date.now()}-${result.ticker}-${result.action}`,
-          timestamp: new Date().toISOString(),
-          ticker: result.ticker,
-          modelProfile: result.modelProfile,
-          action: result.action,
-          signal: result.signal,
-          confidence: result.confidence,
-          submitted: result.submitted,
-          statusMessage: result.statusMessage,
-        },
-        ...current,
-      ].slice(0, 12));
+
+      if (successfulResults.length) {
+        setQuotesByTicker((current) => {
+          const merged = { ...current };
+          for (const result of successfulResults) {
+            merged[result.quote.ticker] = result.quote;
+          }
+          return merged;
+        });
+        setAutoTradeResult(
+          successfulResults.find((result) => result.ticker === selectedTicker) ??
+            successfulResults[0],
+        );
+        setPaperTradeLog((current) => [
+          ...successfulResults.map((result, index) => ({
+            id: `${Date.now()}-${index}-${result.ticker}-${result.action}`,
+            timestamp: new Date().toISOString(),
+            ticker: result.ticker,
+            modelProfile: result.modelProfile,
+            action: result.action,
+            signal: result.signal,
+            confidence: result.confidence,
+            submitted: result.submitted,
+            statusMessage: result.statusMessage,
+          })),
+          ...current,
+        ].slice(0, 24));
+
+        if (successfulResults.length === 1) {
+          setLastAction(successfulResults[0].statusMessage);
+        } else {
+          const buyCount = successfulResults.filter((result) => result.action === "buy").length;
+          const sellCount = successfulResults.filter((result) => result.action === "sell").length;
+          const holdCount = successfulResults.filter((result) => result.action === "hold").length;
+          setLastAction(
+            `Checked ${successfulResults.length} symbols. ${buyCount} buy, ${sellCount} sell, ${holdCount} hold.`,
+          );
+        }
+        void refreshPaperAccount();
+      }
     } catch (err) {
       setAutoTradeError(
         err instanceof Error ? err.message : "Could not execute paper auto-trade.",
@@ -284,11 +573,17 @@ export function TradePage() {
     } finally {
       setAutoTradeLoading(false);
     }
-  }, [modelProfile, refreshCadence, tickerInput]);
+  }, [
+    accountUserId,
+    modelProfile,
+    refreshCadence,
+    refreshPaperAccount,
+    selectedTicker,
+    trackedTickers,
+  ]);
 
   useEffect(() => {
-    const ticker = tickerInput.trim();
-    if (tradeMode !== "model" || !marketSnapshot.isOpen || !ticker) {
+    if (tradeMode !== "model" || !marketSnapshot.isOpen || !trackedTickers.length) {
       return;
     }
 
@@ -297,17 +592,17 @@ export function TradePage() {
         void runAutoTrade();
         return;
       }
-      void loadQuote();
+      void loadTrackedQuotes(trackedTickers);
     }, CADENCE_MS[refreshCadence]);
 
     return () => window.clearInterval(timer);
   }, [
     autoTradeEnabled,
-    loadQuote,
+    loadTrackedQuotes,
     marketSnapshot.isOpen,
     refreshCadence,
     runAutoTrade,
-    tickerInput,
+    trackedTickers,
     tradeMode,
   ]);
 
@@ -320,14 +615,33 @@ export function TradePage() {
   }, [autoTradeEnabled, marketSnapshot.isOpen, runAutoTrade, tradeMode]);
 
   useEffect(() => {
-    const symbol = quote?.ticker ?? tickerInput.trim().toUpperCase();
-    if (!symbol || !marketSnapshot.isOpen || tradeMode !== "model") {
+    if (tradeMode !== "model" || !selectedTicker) {
+      return;
+    }
+
+    if (skipInitialNewsRefreshRef.current) {
+      skipInitialNewsRefreshRef.current = false;
+    } else {
+      void loadNewsReport({ showLoading: true });
+    }
+
+    const timer = window.setInterval(() => {
+      void loadNewsReport();
+    }, CADENCE_MS[refreshCadence]);
+
+    return () => window.clearInterval(timer);
+  }, [loadNewsReport, refreshCadence, selectedTicker, tradeMode]);
+
+  useEffect(() => {
+    if (!trackedTickers.length || !marketSnapshot.isOpen || tradeMode !== "model") {
       setStreamConnected(false);
       return;
     }
 
+    const symbolsParam = trackedTickers.join(",");
+
     const ws = new WebSocket(
-      `${getMlBackendWebSocketUrl()}/v1/ws/trades?ticker=${encodeURIComponent(symbol)}&feed=iex`,
+      `${getMlBackendWebSocketUrl()}/v1/ws/trades?symbols=${encodeURIComponent(symbolsParam)}&feed=iex`,
     );
 
     ws.onopen = () => {
@@ -352,23 +666,27 @@ export function TradePage() {
         }
 
         setLastTickAt(message.timestamp);
-        setQuote((current) => {
-          if (!current || current.ticker !== symbol) {
+        setQuotesByTicker((current) => {
+          const currentQuote = current[message.symbol];
+          if (!currentQuote) {
             return current;
           }
-          const nextHistory = [...(current.history ?? []), message.price].slice(-120);
+          const nextHistory = [...(currentQuote.history ?? []), message.price].slice(-120);
           const previousPrice =
-            current.history?.[current.history.length - 1] ?? current.lastPrice;
+            currentQuote.history?.[currentQuote.history.length - 1] ?? currentQuote.lastPrice;
           const nextChange =
             previousPrice > 0
               ? Number((((message.price / previousPrice) - 1) * 100).toFixed(2))
-              : current.changePercent;
+              : currentQuote.changePercent;
 
           return {
             ...current,
-            lastPrice: message.price,
-            changePercent: nextChange,
-            history: nextHistory,
+            [message.symbol]: {
+              ...currentQuote,
+              lastPrice: message.price,
+              changePercent: nextChange,
+              history: nextHistory,
+            },
           };
         });
       } catch {
@@ -387,12 +705,12 @@ export function TradePage() {
     return () => {
       ws.close();
     };
-  }, [marketSnapshot.isOpen, quote?.ticker, tickerInput, tradeMode]);
+  }, [marketSnapshot.isOpen, trackedTickers, tradeMode]);
 
   const loadMockTradingDay = useCallback(async () => {
-    const raw = tickerInput.trim();
+    const raw = selectedTicker || trackedTickers[0] || "";
     if (!raw) {
-      setMockTradingError("Enter a ticker symbol.");
+      setMockTradingError("Load a tracked stock from the dashboard first.");
       return;
     }
 
@@ -414,22 +732,28 @@ export function TradePage() {
     } finally {
       setMockTradingLoading(false);
     }
-  }, [modelProfile, tickerInput]);
+  }, [modelProfile, selectedTicker, trackedTickers]);
 
   const simulateOrder = useCallback(
     (side: "buy" | "sell") => {
-      const orderTicker = quote?.ticker ?? (tickerInput.trim().toUpperCase() || "-");
+      const orderTicker = quote?.ticker ?? (selectedTicker || "-");
       setLastAction(
         `${side === "buy" ? "Buy" : "Sell"} simulated - no order sent. ` +
           `(Ticker: ${orderTicker})`,
       );
     },
-    [quote?.ticker, tickerInput],
+    [quote?.ticker, selectedTicker],
   );
 
   const activeProfile = quote?.selectedModelProfile ?? modelProfile;
-  const activeChartType = quote?.selectedChartType ?? chartType;
-  const currentSymbol = quote?.ticker ?? (tickerInput.trim().toUpperCase() || "AAPL");
+  const currentSymbol = quote?.ticker || selectedTicker || trackedTickers[0] || "AAPL";
+  const trackedTickerSummary = trackedTickers.length
+    ? trackedTickers.join(", ")
+    : currentSymbol;
+  const visibleNewsHeadlines =
+    newsReport?.newsHeadlines?.length
+      ? newsReport.newsHeadlines
+      : quote?.newsHeadlines ?? [];
   const streamStatusDescription =
     tradeMode !== "model"
       ? null
@@ -455,7 +779,7 @@ export function TradePage() {
             Trade
           </h1>
           <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-            One stock, one chart, and paper trading controls.
+            Track up to three stocks on one live stream with paper trading controls.
           </p>
         </div>
 
@@ -512,24 +836,6 @@ export function TradePage() {
 
           <label className="flex flex-col gap-1">
             <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400">
-              Price view
-              <InfoHint label="Line is the easiest way to follow price movement. Candlestick shows more detail if you want the advanced version." />
-            </span>
-            <select
-              value={chartType}
-              onChange={(e) => {
-                setChartType(e.target.value as ChartType);
-                setLastAction(null);
-              }}
-              className="rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none transition focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-            >
-              <option value="line">Line</option>
-              <option value="candlestick">Candlestick</option>
-            </select>
-          </label>
-
-          <label className="flex flex-col gap-1">
-            <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400">
               Check-ins
               <InfoHint label="This is how often TradeWise checks the model and, if enabled, decides whether to place a paper trade." />
             </span>
@@ -547,39 +853,27 @@ export function TradePage() {
       </section>
 
       <section className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-          <label className="flex min-w-0 flex-col gap-1">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400">
-              Stock or ETF
-            </span>
-            <input
-              type="text"
-              value={tickerInput}
-              onChange={(e) => {
-                setTickerInput(e.target.value);
-                setMockTradingDay(null);
-                setMockTradingError(null);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  void loadQuote();
-                }
-              }}
-              placeholder="e.g. AAPL"
-              className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2.5 font-mono text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-400"
-              autoCapitalize="characters"
-              autoCorrect="off"
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </label>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400">
+              Trade basket
+            </p>
+            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+              This page now works from the tracked symbols below. Change the basket from the dashboard starter sectors instead of typing a new ticker here.
+            </p>
+            {!trackedTickers.length ? (
+              <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+                No tracked symbols loaded. <Link href="/dashboard" className="font-semibold text-zinc-900 underline underline-offset-4 dark:text-zinc-100">Go to Dashboard</Link> to preload a basket.
+              </p>
+            ) : null}
+          </div>
 
           <div className="flex flex-wrap gap-2">
             {tradeMode === "model" ? (
               <button
                 type="button"
                 onClick={() => void loadMockTradingDay()}
-                disabled={mockTradingLoading}
+                disabled={mockTradingLoading || !selectedTicker}
                 className="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 text-sm font-medium text-zinc-900 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
               >
                 {mockTradingLoading ? "Loading..." : "Replay a practice day"}
@@ -587,18 +881,20 @@ export function TradePage() {
             ) : null}
             <button
               type="button"
-              onClick={() => void loadQuote()}
-              disabled={loading}
+              onClick={() => void checkSelectedStocks()}
+              disabled={loading || !trackedTickers.length}
               className="rounded-xl bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
             >
-              {loading ? "Loading..." : "Check this stock"}
+              {loading ? "Checking..." : "Check selected stocks"}
             </button>
           </div>
         </div>
+
         <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
           Mode: {TRADE_MODE_LABELS[tradeMode]}. Risk style:{" "}
           {MODEL_PROFILE_LABELS[modelProfile]}. Check-ins:{" "}
-          {CADENCE_LABELS[refreshCadence]}.
+          {CADENCE_LABELS[refreshCadence]}. Tracking {trackedTickers.length}/
+          {MAX_TRACKED_TICKERS} symbols.
         </p>
         {error ? (
           <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>
@@ -613,12 +909,97 @@ export function TradePage() {
             {autoTradeError}
           </p>
         ) : null}
+        {paperAccountError ? (
+          <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+            {paperAccountError}
+          </p>
+        ) : null}
         {streamError ? (
           <p className="mt-2 text-sm text-red-600 dark:text-red-400">
             {streamError}
           </p>
         ) : null}
+        {newsReportError ? (
+          <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+            {newsReportError}
+          </p>
+        ) : null}
       </section>
+
+      {trackedTickers.length ? (
+        <section className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                Tracked symbols
+              </h2>
+              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                One shared stream updates every symbol below. Select a card to focus the detail view.
+              </p>
+            </div>
+            <p className="text-xs uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
+              {trackedTickers.length}/{MAX_TRACKED_TICKERS} slots used
+            </p>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {trackedTickers.map((ticker) => {
+              const trackedQuote = quotesByTicker[ticker];
+              const isSelected = ticker === selectedTicker;
+              return (
+                <div
+                  key={ticker}
+                  className={`rounded-2xl border p-3 transition ${
+                    isSelected
+                      ? "border-zinc-900 bg-zinc-50 dark:border-zinc-100 dark:bg-zinc-900/70"
+                      : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => selectTrackedTicker(ticker)}
+                    className="w-full text-left"
+                  >
+                    <StockCard quote={trackedQuote} ticker={ticker} compact />
+                  </button>
+                  <div className="mt-3 flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      {trackedQuote?.signal ? (
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
+                            SIGNAL_BADGES[trackedQuote.signal]
+                          }`}
+                        >
+                          {SIGNAL_LABELS[trackedQuote.signal]} •{" "}
+                          {trackedQuote.confidence?.toFixed(1) ?? "-"}%
+                        </span>
+                      ) : (
+                        <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                          Loading quote...
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {isSelected ? (
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
+                          Selected
+                        </span>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => removeTrackedTicker(ticker)}
+                        className="rounded-lg border border-zinc-300 bg-white px-2.5 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
 
       {quote ? (
         <section className="grid gap-4 xl:grid-cols-[20rem_minmax(0,1fr)]">
@@ -659,8 +1040,8 @@ export function TradePage() {
                       TradeWise-guided practice
                     </h2>
                     <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-                      TradeWise can watch {currentSymbol} for you and make paper-only
-                      decisions while this page stays open.
+                      TradeWise can watch {trackedTickerSummary} for you and make
+                      paper-only decisions while this page stays open.
                     </p>
                   </div>
                 </div>
@@ -716,23 +1097,28 @@ export function TradePage() {
                         : "Waiting for the next session"}
                     </dd>
                   </div>
-                  <div>
-                    <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                      Price view
-                      <InfoHint label="Line is the simpler view. Candlestick keeps the more advanced chart format." />
-                    </dt>
-                    <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
-                      {activeChartType === "candlestick" ? "Candlestick" : "Line"}
-                    </dd>
-                  </div>
                 </dl>
                 <p className="mt-4 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
                   {marketSnapshot.isOpen
                     ? autoTradeEnabled
-                      ? `Paper trading is on. TradeWise will keep checking ${currentSymbol} every ${CADENCE_LABELS[refreshCadence]}.`
+                      ? `Paper trading is on. TradeWise will keep checking ${trackedTickerSummary} every ${CADENCE_LABELS[refreshCadence]}.`
                       : "The live price feed is ready. Turn on paper trading when you want TradeWise to handle the practice calls."
                     : "The market is closed right now, so live prices and paper trades stay paused until the next trading session."}
                 </p>
+                <div className="mt-3 rounded-xl border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-950">
+                  <p className="text-xs uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
+                    Paper account ({accountUserId === "guest" ? "guest" : "signed-in user"})
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                    {paperAccountLoading && !paperAccount
+                      ? "Loading account..."
+                      : paperAccount
+                      ? `$${paperAccount.cash.toFixed(2)} cash • ${paperAccount.positions.length} open position${
+                          paperAccount.positions.length === 1 ? "" : "s"
+                        }`
+                      : "No account snapshot yet."}
+                  </p>
+                </div>
                 <div className="mt-4 flex flex-wrap items-center gap-2">
                   <button
                     type="button"
@@ -833,34 +1219,52 @@ export function TradePage() {
                       {lastTickAt ? new Date(lastTickAt).toLocaleTimeString() : "-"}
                     </dd>
                   </div>
-                  <div>
-                    <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                      Price view
-                      <InfoHint label="This matches the chart view you selected at the top of the page." />
-                    </dt>
-                    <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
-                      {activeChartType === "candlestick" ? "Candlestick" : "Line"}
-                    </dd>
-                  </div>
                 </dl>
 
-                <div className="mt-4 rounded-2xl border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950">
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400">
-                    Why it says that
-                  </p>
-                  <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-                    {quote.explanation}
-                  </p>
-                  {quote.newsSummary ? (
-                    <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
-                      Latest headlines: {quote.newsSummary}
+                {tradeMode === "model" ? (
+                  <div className="mt-4 rounded-2xl border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400">
+                        Live news report
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void loadNewsReport({ forceRefresh: true, showLoading: true })}
+                        className="rounded-lg border border-zinc-300 bg-white px-2.5 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                        disabled={newsReportLoading}
+                      >
+                        {newsReportLoading ? "Refreshing..." : "Refresh now"}
+                      </button>
+                    </div>
+                    <div className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50/80 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/60">
+                      <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                        {SIGNAL_LABELS[newsReport?.signal ?? quote.signal]} •{" "}
+                        {(newsReport?.confidence ?? quote.confidence ?? 0).toFixed(1)}%
+                        {" "}confidence
+                      </p>
+                    </div>
+                    <p className="mt-3 text-sm leading-6 text-zinc-700 dark:text-zinc-300">
+                      {newsReport?.studentReasoning ?? newsReport?.report ?? "No news report yet."}
                     </p>
-                  ) : null}
-                </div>
+                    {visibleNewsHeadlines.length ? (
+                      <div className="mt-3 space-y-2 text-sm leading-6 text-zinc-700 dark:text-zinc-300">
+                        {visibleNewsHeadlines.map((headline) => (
+                          <p key={headline}>{headline}</p>
+                        ))}
+                      </div>
+                    ) : null}
+                    <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                      Updates every {CADENCE_LABELS[refreshCadence]} | Last refresh:{" "}
+                      {newsReport ? new Date(newsReport.refreshedAt).toLocaleTimeString() : "-"} | Source:{" "}
+                      {newsReport?.fromCache ? "cache" : "fresh"}
+                      {newsReport?.reasoningSource ? ` | Reasoning: ${newsReport.reasoningSource}` : ""}
+                    </p>
+                  </div>
+                ) : null}
               </section>
             ) : null}
 
-            {activeChartType === "line" && quote.history?.length ? (
+            {quote.history?.length ? (
               <LiveLineChart history={quote.history} ticker={quote.ticker} />
             ) : quote.chartDataUri ? (
               <section className="rounded-2xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950">
@@ -879,12 +1283,17 @@ export function TradePage() {
       ) : (
         <section className="rounded-2xl border border-dashed border-zinc-300 bg-white/70 px-4 py-6 dark:border-zinc-700 dark:bg-zinc-950/40">
           <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-            Start with one stock
+            Load a trade basket first
           </h2>
           <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            Type a stock or ETF, choose whether you want to practice on your own or let
-            TradeWise paper trade, and then load the quote to see the live setup.
+            Use the dashboard starter sectors to preload up to three stocks, then come back here to review the basket, replay a practice day, or let TradeWise paper trade it for you.
           </p>
+          <Link
+            href="/dashboard"
+            className="mt-3 inline-flex rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+          >
+            Go to Dashboard
+          </Link>
         </section>
       )}
 
@@ -1090,4 +1499,3 @@ export function TradePage() {
     </div>
   );
 }
-

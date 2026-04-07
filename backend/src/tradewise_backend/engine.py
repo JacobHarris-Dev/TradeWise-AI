@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 import io
 import re
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pandas as pd
@@ -27,7 +28,20 @@ from .features import (
 from .market_data import get_close_history, get_ohlc_history
 from .model_runtime import load_model_bundle, normalize_model_profile, predict_signal
 from .news import build_news_context
-from .schemas import ChartType, NewsSentiment, QuoteResponse, SignalLabel, TechnicalSnapshot
+from .schemas import (
+    ChartType,
+    NewsSentiment,
+    PriceSnapshotResponse,
+    QuoteResponse,
+    SignalLabel,
+    TechnicalSnapshot,
+)
+
+if TYPE_CHECKING:
+    from .news import NewsContext
+
+
+_MISSING_NEWS_CONTEXT = object()
 
 TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,16}$")
 TICKER_ALIASES = {
@@ -50,6 +64,7 @@ KNOWN_QUOTES: dict[str, str] = {
     "QQQ": "Nasdaq 100 ETF",
     "DIA": "Dow ETF",
 }
+MAX_BATCH_TICKERS = 25
 
 
 def normalize_ticker(raw_ticker: str) -> str:
@@ -192,11 +207,44 @@ def normalize_chart_type(raw_chart_type: str | None) -> ChartType:
     raise ValueError("Invalid chart type. Use line or candlestick.")
 
 
+def normalize_ticker_batch(raw_tickers: list[str]) -> list[str]:
+    tickers = [validate_ticker(normalize_ticker(raw_ticker)) for raw_ticker in raw_tickers]
+    deduped = list(dict.fromkeys(tickers))
+    if not deduped:
+        raise ValueError("At least one ticker is required.")
+    if len(deduped) > MAX_BATCH_TICKERS:
+        raise ValueError(f"Up to {MAX_BATCH_TICKERS} tickers are supported per request.")
+    return deduped
+
+
+def build_price_snapshot(raw_ticker: str) -> PriceSnapshotResponse:
+    ticker = validate_ticker(normalize_ticker(raw_ticker))
+    profile = _price_profile(ticker)
+    history = get_close_history(ticker, length=2)
+    last_price = float(history.iloc[-1])
+    previous_price = float(history.iloc[-2])
+    change_percent = round((last_price / previous_price - 1.0) * 100.0, 2)
+    return PriceSnapshotResponse(
+        ticker=ticker,
+        companyName=profile.company_name,
+        lastPrice=round(last_price, 2),
+        changePercent=change_percent,
+    )
+
+
+def build_price_snapshots(raw_tickers: list[str]) -> list[PriceSnapshotResponse]:
+    tickers = normalize_ticker_batch(raw_tickers)
+    max_workers = min(8, len(tickers))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        return list(executor.map(build_price_snapshot, tickers))
+
+
 def build_quote_response(
     raw_ticker: str,
     include_chart: bool = False,
     model_profile: str | None = None,
     chart_type: str | None = None,
+    news_context_override: object = _MISSING_NEWS_CONTEXT,
 ) -> QuoteResponse:
     ticker = validate_ticker(normalize_ticker(raw_ticker))
     selected_model_profile = normalize_model_profile(model_profile)
@@ -208,7 +256,11 @@ def build_quote_response(
     technicals = TechnicalSnapshot(**asdict(latest_features))
     bundle = load_model_bundle(profile=selected_model_profile)
     model_prediction = predict_signal(bundle, latest_features)
-    news_context = build_news_context(ticker)
+    news_context = (
+        build_news_context(ticker)
+        if news_context_override is _MISSING_NEWS_CONTEXT
+        else cast("NewsContext | None", news_context_override)
+    )
 
     last_price = float(history.iloc[-1])
     previous_price = float(history.iloc[-2])

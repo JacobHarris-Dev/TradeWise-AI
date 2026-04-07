@@ -5,7 +5,7 @@
 
 export type TradeSignal = "bullish" | "bearish" | "neutral";
 export type ModelProfile = "safe" | "neutral" | "risky";
-export type ChartType = "line" | "candlestick";
+export type ChartType = "line";
 export type RefreshCadence = "1m" | "5m" | "15m";
 export type LiveStreamFeed = "iex" | "delayed_sip" | "sip";
 
@@ -35,6 +35,23 @@ export type MockQuote = {
   newsSentiment?: "positive" | "negative" | "neutral" | null;
   newsTopics?: string[];
   newsHeadlines?: string[];
+};
+
+export type PriceSnapshot = Pick<
+  MockQuote,
+  "ticker" | "companyName" | "lastPrice" | "changePercent"
+>;
+
+export type StockRecommendation = {
+  ticker: string;
+  companyName: string;
+  sector: string;
+};
+
+export type StockRecommendationsResponse = {
+  sectors: string[];
+  count: number;
+  results: StockRecommendation[];
 };
 
 export type MockTradingAction = "buy" | "sell" | "hold";
@@ -81,15 +98,86 @@ export type AutoTradeResult = {
   modelProfile: ModelProfile;
   cadence: RefreshCadence;
   mode: "paper";
+  userId?: string | null;
   signal: TradeSignal;
   confidence: number;
   action: "buy" | "sell" | "hold";
   submitted: boolean;
   quantity: number;
   positionBeforeShares: number;
+  positionAfterShares: number;
+  cashBefore?: number | null;
+  cashAfter?: number | null;
   orderId?: string | null;
   statusMessage: string;
   quote: MockQuote;
+};
+
+export type AutoTradeBatchResult = {
+  results: AutoTradeResult[];
+};
+
+export type NewsReport = {
+  ticker: string;
+  report: string;
+  studentReasoning?: string | null;
+  reasoningSource?: "qwen" | "template";
+  signal: TradeSignal;
+  confidence: number;
+  modelVersion: string;
+  refreshedAt: string;
+  fromCache: boolean;
+  refreshSeconds: number;
+  articleCount: number;
+  newsSummary?: string | null;
+  newsSentiment?: "positive" | "negative" | "neutral" | null;
+  newsTopics: string[];
+  newsHeadlines: string[];
+};
+
+export type PaperAccountPosition = {
+  ticker: string;
+  shares: number;
+  avgEntryPrice: number;
+};
+
+export type PaperAccount = {
+  userId: string;
+  startingCash: number;
+  cash: number;
+  positions: PaperAccountPosition[];
+  updatedAt: string;
+};
+
+export type PaperAccountPerformancePosition = {
+  ticker: string;
+  companyName: string;
+  shares: number;
+  avgEntryPrice: number;
+  currentPrice: number;
+  marketValue: number;
+  changePercent?: number | null;
+};
+
+export type PaperAccountPerformancePoint = {
+  timestamp: string;
+  totalEquity: number;
+  cash: number;
+  positionsValue: number;
+};
+
+export type PaperAccountPerformance = {
+  userId: string;
+  startingCash: number;
+  cash: number;
+  positionsValue: number;
+  totalEquity: number;
+  dayChange: number;
+  dayChangePercent: number;
+  baselineEquity: number;
+  positions: PaperAccountPerformancePosition[];
+  points: PaperAccountPerformancePoint[];
+  updatedAt: string;
 };
 
 export type LiveTradeTick = {

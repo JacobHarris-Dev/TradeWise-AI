@@ -6,7 +6,7 @@ import {
   addTickerToWatchlist,
   subscribeToWatchlist,
 } from "@/lib/firestore";
-import { fetchStockQuotes } from "@/lib/stock-quote";
+import { fetchStockPriceSnapshots } from "@/lib/stock-quote";
 import type { MockQuote } from "@/lib/mocks/stock-data";
 import { StockCard } from "@/components/stock/stock-card";
 
@@ -64,9 +64,7 @@ export function Watchlist() {
 
     void (async () => {
       try {
-        const liveQuotes = await fetchStockQuotes([...displayTickers], {
-          includeChart: false,
-        });
+        const liveQuotes = await fetchStockPriceSnapshots([...displayTickers]);
         if (!active) return;
         setQuotes(liveQuotes);
       } catch (e) {

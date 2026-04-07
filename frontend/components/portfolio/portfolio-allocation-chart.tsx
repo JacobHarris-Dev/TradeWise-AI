@@ -22,6 +22,12 @@ function formatUsd(n: number) {
 }
 
 type PieDatum = { name: string; value: number; pct: number };
+type AllocationRow = { ticker: string; value: number; pct?: number };
+type PortfolioAllocationChartProps = {
+  positions?: AllocationRow[];
+  title?: string;
+  description?: string;
+};
 
 type TooltipProps = {
   active?: boolean;
@@ -43,80 +49,104 @@ function PieTooltip({ active, payload }: TooltipProps) {
 /**
  * Interactive donut: hover segments to emphasize slice + tooltip with % and value.
  */
-export function PortfolioAllocationChart() {
-  const positions = useMemo(() => getPortfolioPositions(), []);
+function sliceColor(name: string, index: number) {
+  if (name.toLowerCase() === "cash") {
+    return "#52525b";
+  }
+  return COLORS[index % COLORS.length];
+}
+
+export function PortfolioAllocationChart({
+  positions,
+  title = "Allocation",
+  description = "Hover a slice to see share of your portfolio",
+}: PortfolioAllocationChartProps) {
+  const demoPositions = useMemo(() => getPortfolioPositions(), []);
   const data: PieDatum[] = useMemo(
-    () =>
-      positions.map((p) => ({
-        name: p.ticker,
-        value: p.value,
-        pct: p.pct,
-      })),
-    [positions],
+    () => {
+      const source = positions ?? demoPositions;
+      const nonZero = source.filter((row) => row.value > 0);
+      const total = nonZero.reduce((sum, row) => sum + row.value, 0);
+      return nonZero.map((row) => ({
+        name: row.ticker,
+        value: row.value,
+        pct:
+          row.pct ?? (total > 0 ? Math.round((row.value / total) * 1000) / 10 : 0),
+      }));
+    },
+    [demoPositions, positions],
   );
 
   const [active, setActive] = useState<number | undefined>(undefined);
 
   return (
     <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-semibold text-zinc-900">Allocation</h2>
+      <h2 className="text-lg font-semibold text-zinc-900">{title}</h2>
       <p className="mt-0.5 text-sm text-zinc-500">
-        Hover a slice to see share of your portfolio
+        {description}
       </p>
 
-      <div className="relative mx-auto mt-2 h-[280px] w-full max-w-[320px]">
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
-            <Pie
-              data={data}
-              cx="50%"
-              cy="50%"
-              innerRadius="58%"
-              outerRadius="82%"
-              paddingAngle={2}
-              dataKey="value"
-              nameKey="name"
-              onMouseEnter={(_, i) => setActive(i)}
-              onMouseLeave={() => setActive(undefined)}
-            >
-              {data.map((_, i) => (
-                <Cell
-                  key={data[i].name}
-                  fill={COLORS[i % COLORS.length]}
-                  stroke="#fff"
-                  strokeWidth={2}
-                  style={{
-                    cursor: "pointer",
-                    opacity: active === undefined || active === i ? 1 : 0.45,
-                    transition: "opacity 0.15s ease",
-                  }}
-                />
-              ))}
-            </Pie>
-            <Tooltip content={<PieTooltip />} />
-          </PieChart>
-        </ResponsiveContainer>
-      </div>
+      {data.length ? (
+        <>
+          <div className="relative mx-auto mt-2 h-[280px] w-full max-w-[320px] min-w-0">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={data}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius="58%"
+                  outerRadius="82%"
+                  paddingAngle={2}
+                  dataKey="value"
+                  nameKey="name"
+                  onMouseEnter={(_, i) => setActive(i)}
+                  onMouseLeave={() => setActive(undefined)}
+                >
+                  {data.map((row, i) => (
+                    <Cell
+                      key={row.name}
+                      fill={sliceColor(row.name, i)}
+                      stroke="#fff"
+                      strokeWidth={2}
+                      style={{
+                        cursor: "pointer",
+                        opacity: active === undefined || active === i ? 1 : 0.45,
+                        transition: "opacity 0.15s ease",
+                      }}
+                    />
+                  ))}
+                </Pie>
+                <Tooltip content={<PieTooltip />} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
 
-      <ul className="mt-2 space-y-2 border-t border-zinc-100 pt-4">
-        {data.map((d, i) => (
-          <li
-            key={d.name}
-            className="flex items-center justify-between text-sm"
-            onMouseEnter={() => setActive(i)}
-            onMouseLeave={() => setActive(undefined)}
-          >
-            <span className="flex items-center gap-2">
-              <span
-                className="h-2.5 w-2.5 rounded-full"
-                style={{ backgroundColor: COLORS[i % COLORS.length] }}
-              />
-              <span className="font-mono font-medium text-zinc-800">{d.name}</span>
-            </span>
-            <span className="text-zinc-600">{d.pct}%</span>
-          </li>
-        ))}
-      </ul>
+          <ul className="mt-2 space-y-2 border-t border-zinc-100 pt-4">
+            {data.map((d, i) => (
+              <li
+                key={d.name}
+                className="flex items-center justify-between text-sm"
+                onMouseEnter={() => setActive(i)}
+                onMouseLeave={() => setActive(undefined)}
+              >
+                <span className="flex items-center gap-2">
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: sliceColor(d.name, i) }}
+                  />
+                  <span className="font-mono font-medium text-zinc-800">{d.name}</span>
+                </span>
+                <span className="text-zinc-600">{d.pct}%</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <div className="mt-6 rounded-xl border border-dashed border-zinc-200 bg-zinc-50 px-4 py-6 text-sm text-zinc-500">
+          No positions to chart yet.
+        </div>
+      )}
     </div>
   );
 }

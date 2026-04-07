@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { StockCard } from "@/components/stock/stock-card";
-import { fetchStockQuotes } from "@/lib/stock-quote";
+import { fetchStockPriceSnapshots } from "@/lib/stock-quote";
 import type { MockQuote } from "@/lib/mocks/stock-data";
 
 const MARKET_TICKERS = ["SPY", "QQQ", "DIA"] as const;
@@ -22,9 +22,7 @@ export function MarketOverview() {
 
     void (async () => {
       try {
-        const liveQuotes = await fetchStockQuotes([...MARKET_TICKERS], {
-          includeChart: false,
-        });
+        const liveQuotes = await fetchStockPriceSnapshots([...MARKET_TICKERS]);
         if (!active) return;
         setQuotes(liveQuotes);
       } catch (e) {

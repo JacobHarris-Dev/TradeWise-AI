@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover - exercised only when websockets is miss
 
 ALLOWED_STREAM_FEEDS = {"iex", "delayed_sip", "sip"}
 DEFAULT_STREAM_FEED = os.getenv("ML_LIVE_STREAM_FEED", "iex").strip().lower() or "iex"
+MAX_STREAM_SYMBOLS = 30
 
 
 def normalize_live_stream_feed(raw_feed: str | None) -> LiveStreamFeed:
@@ -22,6 +23,18 @@ def normalize_live_stream_feed(raw_feed: str | None) -> LiveStreamFeed:
     if feed in ALLOWED_STREAM_FEEDS:
         return feed  # type: ignore[return-value]
     raise ValueError("Invalid live stream feed. Use iex, delayed_sip, or sip.")
+
+
+def normalize_live_stream_symbols(raw_symbols: str) -> list[str]:
+    parts = [part.strip() for part in raw_symbols.split(",")]
+    symbols = [validate_ticker(normalize_ticker(part)) for part in parts if part.strip()]
+    if not symbols:
+        raise ValueError("At least one ticker is required for the live stream.")
+
+    deduped = list(dict.fromkeys(symbols))
+    if len(deduped) > MAX_STREAM_SYMBOLS:
+        raise ValueError(f"Live stream supports up to {MAX_STREAM_SYMBOLS} symbols per connection.")
+    return deduped
 
 
 def _market_data_credentials() -> tuple[str, str]:
@@ -44,13 +57,13 @@ def _market_data_credentials() -> tuple[str, str]:
 
 async def relay_live_trade_stream(
     websocket: WebSocket,
-    raw_ticker: str,
+    raw_symbols: str,
     raw_feed: str | None = None,
 ) -> None:
     if websockets is None:
         raise RuntimeError("Install websockets to enable the live stock stream.")
 
-    ticker = validate_ticker(normalize_ticker(raw_ticker))
+    tickers = normalize_live_stream_symbols(raw_symbols)
     feed = normalize_live_stream_feed(raw_feed)
     key_id, secret_key = _market_data_credentials()
     upstream_url = f"wss://stream.data.alpaca.markets/v2/{feed}"
@@ -63,14 +76,15 @@ async def relay_live_trade_stream(
                 json.dumps({"action": "auth", "key": key_id, "secret": secret_key})
             )
             await upstream.recv()
-            await upstream.send(json.dumps({"action": "subscribe", "trades": [ticker]}))
-            await websocket.send_json(
-                LiveStreamStatus(
-                    symbol=ticker,
-                    feed=feed,
-                    status="connected",
-                ).model_dump()
-            )
+            await upstream.send(json.dumps({"action": "subscribe", "trades": tickers}))
+            for ticker in tickers:
+                await websocket.send_json(
+                    LiveStreamStatus(
+                        symbol=ticker,
+                        feed=feed,
+                        status="connected",
+                    ).model_dump()
+                )
 
             while True:
                 payload = await upstream.recv()
@@ -81,10 +95,10 @@ async def relay_live_trade_stream(
                 for message in messages:
                     if not isinstance(message, dict):
                         continue
-                    if message.get("T") == "t" and message.get("S") == ticker:
+                    if message.get("T") == "t" and message.get("S") in tickers:
                         await websocket.send_json(
                             LiveTradeTick(
-                                symbol=ticker,
+                                symbol=str(message["S"]),
                                 price=float(message["p"]),
                                 size=int(message.get("s", 0)) if message.get("s") is not None else None,
                                 timestamp=str(message.get("t", "")),

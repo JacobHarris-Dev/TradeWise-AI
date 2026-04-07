@@ -2,6 +2,7 @@
 
 import { useAuth } from "@/components/providers/auth-provider";
 import { MarketOverview } from "@/components/dashboard/market-overview";
+import { TradeStarterSectors } from "@/components/dashboard/trade-starter-sectors";
 import { Watchlist } from "@/components/watchlist/watchlist";
 
 /**
@@ -32,6 +33,7 @@ export function DashboardPage() {
         </p>
       </section>
 
+      <TradeStarterSectors />
       <Watchlist />
       <MarketOverview />
     </div>
