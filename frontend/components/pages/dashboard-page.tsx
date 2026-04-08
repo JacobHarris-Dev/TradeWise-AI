@@ -1,7 +1,9 @@
 "use client";
 
 import { useAuth } from "@/components/providers/auth-provider";
+import { InvestmentChatBubble } from "@/components/dashboard/investment-chat-bubble";
 import { MarketOverview } from "@/components/dashboard/market-overview";
+import { TradeStarterSectors } from "@/components/dashboard/trade-starter-sectors";
 import { Watchlist } from "@/components/watchlist/watchlist";
 
 /**
@@ -30,8 +32,10 @@ export function DashboardPage() {
           Track symbols, scan the market snapshot, and use Trade or Portfolio for
           the next steps.
         </p>
+        <InvestmentChatBubble />
       </section>
 
+      <TradeStarterSectors />
       <Watchlist />
       <MarketOverview />
     </div>

@@ -2,11 +2,33 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket
 from starlette.websockets import WebSocketState
 
 from . import MODEL_VERSION
-from .engine import build_quote_response
+from .engine import build_price_snapshots, build_quote_response
 from .live_stream import relay_live_trade_stream
 from .mock_trading import DEFAULT_MOCK_STEPS, MAX_MOCK_STEPS, MIN_MOCK_STEPS, build_mock_trading_day_response
-from .paper_trading import execute_auto_trade
-from .schemas import AnalyzeRequest, AutoTradeRequest, AutoTradeResponse, MockTradingDayResponse, QuoteResponse
+from .news import build_news_context_snapshot
+from .news_reasoning import build_investment_chat_reply, build_student_news_reasoning
+from .paper_account import get_paper_account, grant_paper_position
+from .paper_portfolio import build_paper_account_performance
+from .paper_trading import execute_auto_trade, execute_auto_trade_batch
+from .schemas import (
+    AnalyzeRequest,
+    AutoTradeBatchRequest,
+    AutoTradeBatchResponse,
+    AutoTradeRequest,
+    AutoTradeResponse,
+    InvestmentChatRequest,
+    InvestmentChatResponse,
+    MockTradingDayResponse,
+    NewsReportResponse,
+    PaperPositionGrantRequest,
+    PaperAccountResponse,
+    PaperAccountPerformanceResponse,
+    PriceSnapshotResponse,
+    QuoteResponse,
+    StockRecommendationResponse,
+    StockRecommendationsResponse,
+)
+from .stock_universe import recommend_stocks_for_sectors
 
 app = FastAPI(title="TradeWise ML Backend", version=MODEL_VERSION)
 
@@ -40,6 +62,45 @@ def get_quote(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@app.get("/v1/price-snapshots", response_model=list[PriceSnapshotResponse])
+def get_price_snapshots(
+    tickers: str = Query(..., min_length=1, max_length=512),
+) -> list[PriceSnapshotResponse]:
+    try:
+        return build_price_snapshots(tickers.split(","))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/v1/stock-universe/recommendations", response_model=StockRecommendationsResponse)
+def get_stock_recommendations(
+    sectors: str = Query(..., min_length=1, max_length=256),
+    count: int = Query(3, ge=1, le=5),
+) -> StockRecommendationsResponse:
+    raw_sectors = [value.strip() for value in sectors.split(",") if value.strip()]
+    try:
+        recommendations = recommend_stocks_for_sectors(raw_sectors, count=count)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    normalized_sectors = sorted({item.strip().lower() for item in raw_sectors if item.strip()})
+
+    return StockRecommendationsResponse(
+        sectors=normalized_sectors,
+        count=count,
+        results=[
+            StockRecommendationResponse(
+                ticker=item.ticker,
+                companyName=item.company_name,
+                sector=item.sector,
+            )
+            for item in recommendations
+        ],
+    )
+
+
 @app.post("/v1/analyze", response_model=QuoteResponse)
 def analyze_quote(payload: AnalyzeRequest) -> QuoteResponse:
     try:
@@ -53,6 +114,74 @@ def analyze_quote(payload: AnalyzeRequest) -> QuoteResponse:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/v1/investment-chat", response_model=InvestmentChatResponse)
+def investment_chat(payload: InvestmentChatRequest) -> InvestmentChatResponse:
+    try:
+        result = build_investment_chat_reply(
+            prompt=payload.prompt,
+            model_profile=payload.modelProfile,
+            sectors=payload.sectors,
+            tracked_tickers=payload.trackedTickers,
+        )
+        return InvestmentChatResponse(reply=result.text, source=result.source)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/v1/news-report", response_model=NewsReportResponse)
+def get_news_report(
+    ticker: str = Query(..., min_length=1, max_length=16),
+    model_profile: str | None = Query(None, alias="modelProfile"),
+    refresh_seconds: int | None = Query(None, alias="refreshSeconds", ge=0, le=3600),
+    force_refresh: bool = Query(False, alias="forceRefresh"),
+) -> NewsReportResponse:
+    try:
+        snapshot = build_news_context_snapshot(
+            ticker,
+            refresh_seconds=refresh_seconds,
+            force_refresh=force_refresh,
+        )
+        quote = build_quote_response(
+            ticker,
+            include_chart=False,
+            model_profile=model_profile,
+            chart_type="line",
+            news_context_override=snapshot.context,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    reasoning = build_student_news_reasoning(
+        ticker=quote.ticker,
+        signal=quote.signal,
+        confidence=quote.confidence,
+        sentiment=quote.newsSentiment,
+        topics=quote.newsTopics,
+        headlines=quote.newsHeadlines,
+        force_refresh=force_refresh,
+    )
+
+    return NewsReportResponse(
+        ticker=quote.ticker,
+        report=reasoning.text,
+        studentReasoning=reasoning.text,
+        reasoningSource="qwen" if reasoning.source == "qwen" else "template",
+        signal=quote.signal,
+        confidence=quote.confidence,
+        modelVersion=quote.modelVersion,
+        refreshedAt=snapshot.fetched_at.isoformat(),
+        fromCache=snapshot.from_cache,
+        refreshSeconds=snapshot.refresh_seconds,
+        articleCount=0 if snapshot.context is None else snapshot.context.article_count,
+        newsSummary=quote.newsSummary,
+        newsSentiment=quote.newsSentiment,
+        newsTopics=quote.newsTopics,
+        newsHeadlines=quote.newsHeadlines,
+    )
 
 
 @app.get("/v1/mock-day", response_model=MockTradingDayResponse)
@@ -84,6 +213,7 @@ def auto_trade(payload: AutoTradeRequest) -> AutoTradeResponse:
             payload.ticker,
             model_profile=payload.modelProfile,
             cadence=payload.cadence,
+            user_id=payload.userId,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -91,12 +221,58 @@ def auto_trade(payload: AutoTradeRequest) -> AutoTradeResponse:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@app.post("/v1/auto-trade/batch", response_model=AutoTradeBatchResponse)
+def auto_trade_batch(payload: AutoTradeBatchRequest) -> AutoTradeBatchResponse:
+    try:
+        return AutoTradeBatchResponse(
+            results=execute_auto_trade_batch(
+                payload.tickers,
+                model_profile=payload.modelProfile,
+                cadence=payload.cadence,
+                user_id=payload.userId,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/v1/paper-account", response_model=PaperAccountResponse)
+def paper_account(
+    user_id: str | None = Query(None, alias="userId"),
+) -> PaperAccountResponse:
+    return get_paper_account(user_id)
+
+
+@app.get("/v1/paper-account/performance", response_model=PaperAccountPerformanceResponse)
+def paper_account_performance(
+    user_id: str | None = Query(None, alias="userId"),
+) -> PaperAccountPerformanceResponse:
+    return build_paper_account_performance(user_id)
+
+
+@app.post("/v1/paper-account/grant", response_model=PaperAccountResponse)
+def paper_account_grant(payload: PaperPositionGrantRequest) -> PaperAccountResponse:
+    try:
+        return grant_paper_position(
+            user_id=payload.userId,
+            ticker=payload.ticker,
+            shares=payload.shares,
+            avg_entry_price=payload.avgEntryPrice,
+            cash=payload.cash,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.websocket("/v1/ws/trades")
 async def stream_trades(websocket: WebSocket) -> None:
     ticker = websocket.query_params.get("ticker")
+    symbols = websocket.query_params.get("symbols")
     feed = websocket.query_params.get("feed")
     try:
-        await relay_live_trade_stream(websocket, ticker or "", feed)
+        await relay_live_trade_stream(websocket, symbols or ticker or "", feed)
     except Exception as exc:
         if websocket.application_state == WebSocketState.CONNECTING:
             await websocket.accept()

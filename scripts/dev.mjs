@@ -1,22 +1,19 @@
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import {
+  getBackendStartupHelp,
+  getNpmCommand,
+  resolveBackendPython,
+} from "./dev-utils.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const frontendDir = join(rootDir, "frontend");
 const backendDir = join(rootDir, "backend");
-
 const isWin = process.platform === "win32";
-const backendVenvPython = isWin
-  ? join(backendDir, ".venv", "Scripts", "python.exe")
-  : join(backendDir, ".venv", "bin", "python");
-const backendPython = existsSync(backendVenvPython)
-  ? backendVenvPython
-  : isWin
-    ? "python"
-    : "python3";
-
+const backendPython = resolveBackendPython(rootDir, backendDir);
+const npmCommand = getNpmCommand();
 
 function loadEnvFile(envPath) {
   if (!existsSync(envPath)) {
@@ -43,6 +40,7 @@ function loadEnvFile(envPath) {
     if (isSingleQuoted || isDoubleQuoted) {
       value = value.slice(1, -1);
     }
+
     loaded[match[1]] = value;
   }
 
@@ -85,9 +83,11 @@ function shutdown(exitCode = 0) {
     return;
   }
   shuttingDown = true;
+
   try {
     frontend?.kill("SIGTERM");
   } catch {}
+
   try {
     backend?.kill("SIGTERM");
   } catch {}
@@ -97,11 +97,12 @@ function shutdown(exitCode = 0) {
   }, 300).unref();
 }
 
-function spawnService(command, args, cwd, env) {
+function spawnService(command, args, cwd, env, options = {}) {
   const child = spawn(command, args, {
     cwd,
     env,
     stdio: "inherit",
+    shell: options.shell ?? false,
   });
 
   child.on("exit", (code, signal) => {
@@ -137,6 +138,11 @@ frontend = spawnService(
   ["run", "dev", "--", "--hostname", "127.0.0.1", "--port", frontendPort],
   frontendDir,
   frontendEnv,
+  {
+    // On Windows, use shell to resolve npm.cmd from PATH.
+    shell: isWin,
+    serviceName: "frontend",
+  },
 );
 
 backend = spawnService(

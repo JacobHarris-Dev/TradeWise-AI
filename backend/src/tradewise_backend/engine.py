@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 import io
 import re
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pandas as pd
@@ -25,7 +27,21 @@ from .features import (
 )
 from .market_data import get_close_history, get_ohlc_history
 from .model_runtime import load_model_bundle, normalize_model_profile, predict_signal
-from .schemas import ChartType, QuoteResponse, SignalLabel, TechnicalSnapshot
+from .news import build_news_context
+from .schemas import (
+    ChartType,
+    NewsSentiment,
+    PriceSnapshotResponse,
+    QuoteResponse,
+    SignalLabel,
+    TechnicalSnapshot,
+)
+
+if TYPE_CHECKING:
+    from .news import NewsContext
+
+
+_MISSING_NEWS_CONTEXT = object()
 
 TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,16}$")
 TICKER_ALIASES = {
@@ -48,6 +64,7 @@ KNOWN_QUOTES: dict[str, str] = {
     "QQQ": "Nasdaq 100 ETF",
     "DIA": "Dow ETF",
 }
+MAX_BATCH_TICKERS = 25
 
 
 def normalize_ticker(raw_ticker: str) -> str:
@@ -157,6 +174,26 @@ def _build_candlestick_chart_data_uri(history: pd.DataFrame, ticker: str) -> str
     return f"data:image/png;base64,{encoded}"
 
 
+def _build_news_supporting_sentence(
+    signal: SignalLabel,
+    news_summary: str | None,
+    news_sentiment: str | None,
+    topics: tuple[str, ...] | list[str],
+) -> str:
+    if not news_summary and not topics:
+        return ""
+
+    topic_suffix = f" Main topic: {topics[0]}." if topics else ""
+
+    if news_sentiment == "positive":
+        return f" News tone is mostly positive.{topic_suffix}"
+    if news_sentiment == "negative":
+        return f" News tone is more cautious.{topic_suffix}"
+    if signal == "neutral":
+        return f" News tone is mixed right now.{topic_suffix}"
+    return f" News is being used as supporting context.{topic_suffix}"
+
+
 def normalize_chart_type(raw_chart_type: str | None) -> ChartType:
     if raw_chart_type is None:
         return "line"
@@ -170,11 +207,44 @@ def normalize_chart_type(raw_chart_type: str | None) -> ChartType:
     raise ValueError("Invalid chart type. Use line or candlestick.")
 
 
+def normalize_ticker_batch(raw_tickers: list[str]) -> list[str]:
+    tickers = [validate_ticker(normalize_ticker(raw_ticker)) for raw_ticker in raw_tickers]
+    deduped = list(dict.fromkeys(tickers))
+    if not deduped:
+        raise ValueError("At least one ticker is required.")
+    if len(deduped) > MAX_BATCH_TICKERS:
+        raise ValueError(f"Up to {MAX_BATCH_TICKERS} tickers are supported per request.")
+    return deduped
+
+
+def build_price_snapshot(raw_ticker: str) -> PriceSnapshotResponse:
+    ticker = validate_ticker(normalize_ticker(raw_ticker))
+    profile = _price_profile(ticker)
+    history = get_close_history(ticker, length=2)
+    last_price = float(history.iloc[-1])
+    previous_price = float(history.iloc[-2])
+    change_percent = round((last_price / previous_price - 1.0) * 100.0, 2)
+    return PriceSnapshotResponse(
+        ticker=ticker,
+        companyName=profile.company_name,
+        lastPrice=round(last_price, 2),
+        changePercent=change_percent,
+    )
+
+
+def build_price_snapshots(raw_tickers: list[str]) -> list[PriceSnapshotResponse]:
+    tickers = normalize_ticker_batch(raw_tickers)
+    max_workers = min(8, len(tickers))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        return list(executor.map(build_price_snapshot, tickers))
+
+
 def build_quote_response(
     raw_ticker: str,
     include_chart: bool = False,
     model_profile: str | None = None,
     chart_type: str | None = None,
+    news_context_override: object = _MISSING_NEWS_CONTEXT,
 ) -> QuoteResponse:
     ticker = validate_ticker(normalize_ticker(raw_ticker))
     selected_model_profile = normalize_model_profile(model_profile)
@@ -186,6 +256,11 @@ def build_quote_response(
     technicals = TechnicalSnapshot(**asdict(latest_features))
     bundle = load_model_bundle(profile=selected_model_profile)
     model_prediction = predict_signal(bundle, latest_features)
+    news_context = (
+        build_news_context(ticker)
+        if news_context_override is _MISSING_NEWS_CONTEXT
+        else cast("NewsContext | None", news_context_override)
+    )
 
     last_price = float(history.iloc[-1])
     previous_price = float(history.iloc[-2])
@@ -199,22 +274,32 @@ def build_quote_response(
         signal = model_prediction.signal
         confidence = model_prediction.confidence
         model_version = model_prediction.model_version
+        trend_direction = "up" if short_ma >= long_ma else "down"
         explanation = (
-            f"Trained model {model_version} predicts {signal}. "
-            f"Short MA {short_ma:.2f} vs long MA {long_ma:.2f}, "
-            f"7-day momentum {momentum * 100:.2f}%, volatility {volatility * 100:.2f}%."
+            f"This looks {signal} right now ({confidence:.1f}% confidence). "
+            f"Short trend is {trend_direction}. "
+            f"7-day move: {momentum * 100:.1f}%. "
+            f"Volatility: {volatility * 100:.1f}%."
         )
     else:
         score = _signal_score(short_ma, long_ma, momentum, volatility)
         signal = _signal_from_score(score)
         confidence = round(min(99.0, max(50.0, 55.0 + abs(score) * 45.0)), 1)
         model_version = MODEL_VERSION
+        trend_direction = "up" if short_ma >= long_ma else "down"
         explanation = (
-            f"{signal.title()} bias from trend and momentum. "
-            f"Short MA {short_ma:.2f} vs long MA {long_ma:.2f}, "
-            f"7-day momentum {momentum * 100:.2f}%, volatility {volatility * 100:.2f}%, "
-            f"30-day discount factor {technicals.discountFactor:.4f}."
+            f"This looks {signal} right now ({confidence:.1f}% confidence). "
+            f"Short trend is {trend_direction}. "
+            f"7-day move: {momentum * 100:.1f}%. "
+            f"Volatility: {volatility * 100:.1f}%."
         )
+
+    explanation += _build_news_supporting_sentence(
+        signal,
+        news_context.summary if news_context else None,
+        news_context.sentiment if news_context else None,
+        news_context.topics if news_context else (),
+    )
 
     return QuoteResponse(
         ticker=ticker,
@@ -239,4 +324,10 @@ def build_quote_response(
             if include_chart
             else None
         ),
+        newsSummary=news_context.summary if news_context else None,
+        newsSentiment=(
+            cast(NewsSentiment, news_context.sentiment) if news_context else None
+        ),
+        newsTopics=list(news_context.topics) if news_context else [],
+        newsHeadlines=list(news_context.headlines) if news_context else [],
     )

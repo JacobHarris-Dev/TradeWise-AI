@@ -10,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import type { PaperAccountPerformancePoint } from "@/lib/mocks/stock-data";
 import type { PortfolioTimeRange } from "@/lib/mocks/portfolio-demo";
 import {
   getPortfolioTotal,
@@ -35,8 +36,17 @@ function formatUsd(n: number) {
   }).format(n);
 }
 
+type PortfolioGrowthChartProps = {
+  totalValue?: number;
+  title?: string;
+  points?: PaperAccountPerformancePoint[];
+  dayChange?: number;
+  dayChangePercent?: number;
+  updatedAt?: string;
+};
+
 type TooltipPayload = {
-  payload?: { label: string; value: number };
+  payload?: { label: string; fullLabel?: string; value: number };
 };
 
 function ChartTooltip({
@@ -51,7 +61,7 @@ function ChartTooltip({
   if (!p) return null;
   return (
     <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-md">
-      <p className="font-medium text-zinc-900">{p.label}</p>
+      <p className="font-medium text-zinc-900">{p.fullLabel ?? p.label}</p>
       <p className="text-emerald-600">{formatUsd(p.value)}</p>
     </div>
   );
@@ -60,23 +70,60 @@ function ChartTooltip({
 /**
  * Interactive portfolio value over time (mock series). Time-range pills update the chart.
  */
-export function PortfolioGrowthChart() {
-  const total = useMemo(() => getPortfolioTotal(), []);
+export function PortfolioGrowthChart({
+  totalValue,
+  title = "Total portfolio value",
+  points,
+  dayChange,
+  dayChangePercent,
+  updatedAt,
+}: PortfolioGrowthChartProps) {
+  const demoTotal = useMemo(() => getPortfolioTotal(), []);
+  const total = totalValue ?? demoTotal;
   const [range, setRange] = useState<PortfolioTimeRange>("1m");
+  const liveData = useMemo(
+    () =>
+      points?.map((point) => {
+        const date = new Date(point.timestamp);
+        return {
+          label: date.toLocaleTimeString([], {
+            hour: "numeric",
+            minute: "2-digit",
+          }),
+          fullLabel: date.toLocaleString(),
+          value: point.totalEquity,
+        };
+      }) ?? [],
+    [points],
+  );
   const data = useMemo(
-    () => portfolioHistoryForRange(range, total),
-    [range, total],
+    () => (liveData.length ? liveData : portfolioHistoryForRange(range, total)),
+    [liveData, range, total],
+  );
+  const firstValue = data[0]?.value ?? total;
+  const resolvedDayChange = useMemo(
+    () => (typeof dayChange === "number" ? dayChange : total - firstValue),
+    [dayChange, firstValue, total],
   );
   const pctChange = useMemo(
-    () => portfolioPercentChange(range, total),
-    [range, total],
+    () =>
+      liveData.length
+        ? (typeof dayChangePercent === "number"
+            ? dayChangePercent
+            : firstValue > 0
+              ? Math.round(((total - firstValue) / firstValue) * 10000) / 100
+              : 0)
+        : portfolioPercentChange(range, total),
+    [dayChangePercent, firstValue, liveData.length, range, total],
   );
+  const isLiveIntraday = liveData.length > 0;
+  const changePrefix = resolvedDayChange >= 0 ? "+" : "-";
 
   return (
     <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-sm font-medium text-zinc-500">Total portfolio value</p>
+          <p className="text-sm font-medium text-zinc-500">{title}</p>
           <p className="mt-1 text-3xl font-semibold tracking-tight text-zinc-900">
             {formatUsd(total)}
           </p>
@@ -85,29 +132,44 @@ export function PortfolioGrowthChart() {
               pctChange >= 0 ? "text-emerald-600" : "text-red-600"
             }`}
           >
-            {pctChange >= 0 ? "+" : ""}
-            {pctChange.toFixed(2)}% <span className="font-normal text-zinc-500">in range</span>
+            {changePrefix}
+            {formatUsd(Math.abs(resolvedDayChange))} ({changePrefix}
+            {Math.abs(pctChange).toFixed(2)}%){" "}
+            <span className="font-normal text-zinc-500">
+              {isLiveIntraday ? "today" : "in range"}
+            </span>
           </p>
+          {isLiveIntraday && updatedAt ? (
+            <p className="mt-1 text-xs text-zinc-500">
+              Updated {new Date(updatedAt).toLocaleTimeString()}
+            </p>
+          ) : null}
         </div>
-        <div className="flex flex-wrap gap-1">
-          {RANGES.map(({ key, label }) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setRange(key)}
-              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                range === key
-                  ? "bg-emerald-600 text-white shadow-sm"
-                  : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {isLiveIntraday ? (
+          <div className="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">
+            1D live
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-1">
+            {RANGES.map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setRange(key)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                  range === key
+                    ? "bg-emerald-600 text-white shadow-sm"
+                    : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      <div className="mt-6 h-[280px] w-full min-h-[240px]">
+      <div className="mt-6 h-[280px] w-full min-h-[240px] min-w-0">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <defs>
@@ -122,6 +184,8 @@ export function PortfolioGrowthChart() {
               tick={{ fontSize: 11, fill: "#71717a" }}
               axisLine={false}
               tickLine={false}
+              interval="preserveStartEnd"
+              minTickGap={24}
             />
             <YAxis
               tickFormatter={(v) =>

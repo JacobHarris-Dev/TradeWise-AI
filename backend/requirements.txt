@@ -11,3 +11,7 @@ alpaca-py
 websockets
 uvicorn[standard]
 pydantic
+torch
+transformers
+huggingface_hub
+accelerate

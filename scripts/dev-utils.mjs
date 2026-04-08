@@ -19,7 +19,25 @@ export function getNpmCommand() {
 }
 
 export function resolveBackendPython(rootDir, backendDir) {
+  const explicitPythonPath = process.env.ML_BACKEND_PYTHON_PATH?.trim();
+  if (explicitPythonPath && canSpawn(explicitPythonPath, ["--version"])) {
+    return {
+      command: explicitPythonPath,
+      args: [],
+      source: explicitPythonPath,
+    };
+  }
+
+  const preferredEnvName = process.env.ML_BACKEND_PYTHON_ENV?.trim();
+  const preferredCandidates = preferredEnvName
+    ? [
+        join(backendDir, preferredEnvName, pythonBinDir, pythonExecutable),
+        join(rootDir, preferredEnvName, pythonBinDir, pythonExecutable),
+      ]
+    : [];
+
   const venvCandidates = [
+    ...preferredCandidates,
     join(backendDir, ".venv", pythonBinDir, pythonExecutable),
     join(rootDir, ".venv", pythonBinDir, pythonExecutable),
   ];
@@ -60,6 +78,7 @@ export function resolveBackendPython(rootDir, backendDir) {
 export function getBackendStartupHelp(rootDir, backendDir) {
   const backendVenv = join(backendDir, ".venv");
   const repoVenv = join(rootDir, ".venv");
+  const preferredEnvName = process.env.ML_BACKEND_PYTHON_ENV?.trim();
 
   if (isWindows) {
     return [
@@ -76,6 +95,9 @@ export function getBackendStartupHelp(rootDir, backendDir) {
   return [
     "Unable to start the Python backend.",
     `Checked: ${backendVenv} and ${repoVenv}`,
+    preferredEnvName
+      ? `Also checked preferred env: ${join(backendDir, preferredEnvName)}`
+      : "Tip: set ML_BACKEND_PYTHON_ENV=venv311 to force the Python 3.11 backend env.",
     "Expected one of: a working virtualenv, `python3`, or `python` on PATH.",
     "Create or repair a virtualenv, then install backend requirements.",
   ].join("\n");

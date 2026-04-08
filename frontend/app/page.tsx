@@ -1,6 +1,5 @@
-import { redirect } from "next/navigation";
+import { PublicLandingPage } from "@/components/landing/public-landing-page";
 
-/** Landing URL sends users straight into the main dashboard experience. */
 export default function Home() {
-  redirect("/dashboard");
+  return <PublicLandingPage />;
 }

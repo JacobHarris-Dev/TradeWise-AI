@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,10 +9,39 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from training.data import get_default_training_tickers
 from training.trained_model import build_dataset_from_csv
+from tradewise_backend.stock_universe import reset_stock_universe_cache
 
 
 class TrainedModelDatasetTestCase(unittest.TestCase):
+    def test_default_training_tickers_use_stock_universe_csv(self) -> None:
+        previous_csv_path = os.environ.get("ML_STOCK_UNIVERSE_CSV")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            csv_path = Path(temp_dir) / "universe.csv"
+            csv_path.write_text(
+                "\n".join(
+                    [
+                        "ticker,company_name,sector,industry,priority,is_student_friendly",
+                        "ZZZ,Zeta Corp.,Technology,Software,3,true",
+                        "AAA,Alpha Corp.,Technology,Hardware,1,true",
+                        "MMM,Micro Corp.,Healthcare,Devices,2,false",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            os.environ["ML_STOCK_UNIVERSE_CSV"] = str(csv_path)
+            reset_stock_universe_cache()
+            tickers = get_default_training_tickers()
+
+        if previous_csv_path is None:
+            os.environ.pop("ML_STOCK_UNIVERSE_CSV", None)
+        else:
+            os.environ["ML_STOCK_UNIVERSE_CSV"] = previous_csv_path
+        reset_stock_universe_cache()
+
+        self.assertEqual(tickers, ("AAA", "ZZZ", "MMM"))
+
     def test_build_dataset_from_csv_translates_columns_for_runtime_model(self) -> None:
         source = pd.DataFrame(
             {
