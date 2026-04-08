@@ -32,6 +32,8 @@ from .schemas import (
     ChartType,
     NewsSentiment,
     PriceSnapshotResponse,
+    QuoteBatchError,
+    QuoteBatchResponse,
     QuoteResponse,
     SignalLabel,
     TechnicalSnapshot,
@@ -331,3 +333,37 @@ def build_quote_response(
         newsTopics=list(news_context.topics) if news_context else [],
         newsHeadlines=list(news_context.headlines) if news_context else [],
     )
+
+
+def build_quote_responses(
+    raw_tickers: list[str],
+    include_chart: bool = False,
+    model_profile: str | None = None,
+    chart_type: str | None = None,
+) -> QuoteBatchResponse:
+    tickers = normalize_ticker_batch(raw_tickers)
+    normalize_model_profile(model_profile)
+    normalize_chart_type(chart_type)
+
+    max_workers = 1 if include_chart else min(8, len(tickers))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(
+                build_quote_response,
+                ticker,
+                include_chart=include_chart,
+                model_profile=model_profile,
+                chart_type=chart_type,
+            )
+            for ticker in tickers
+        ]
+
+        results: list[QuoteResponse] = []
+        errors: list[QuoteBatchError] = []
+        for ticker, future in zip(tickers, futures):
+            try:
+                results.append(future.result())
+            except (RuntimeError, ValueError) as exc:
+                errors.append(QuoteBatchError(ticker=ticker, message=str(exc)))
+
+    return QuoteBatchResponse(results=results, errors=errors)

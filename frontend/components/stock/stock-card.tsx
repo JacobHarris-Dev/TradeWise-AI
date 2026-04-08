@@ -13,7 +13,7 @@ type StockCardProps = {
 
 /**
  * Reusable summary of one symbol: ticker, name, price, day change.
- * Used on Dashboard (watchlist / market), Trade (detail), and anywhere else you list stocks.
+ * Used across the Trade and Portfolio surfaces, and anywhere else you list stocks.
  */
 export function StockCard({
   quote,

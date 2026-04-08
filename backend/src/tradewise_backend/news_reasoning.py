@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from importlib import import_module
-import os
-import sys
 from threading import Lock
 from time import monotonic
 from contextlib import nullcontext
 
 
-DEFAULT_QWEN_MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
+DEFAULT_QWEN_MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 DEFAULT_REASONING_CACHE_SECONDS = 120
+DEFAULT_INVESTMENT_CHAT_MAX_NEW_TOKENS = 32
 
 
 @dataclass(frozen=True)
@@ -59,9 +59,7 @@ def _qwen_local_only() -> bool:
 
 
 def _qwen_runtime_supported() -> bool:
-    # The current transformers stack used by this backend is unreliable on 3.13+.
-    # Fail fast so callers can immediately fall back to template reasoning.
-    return sys.version_info < (3, 13)
+    return True
 
 
 def _qwen_device_map() -> str:
@@ -73,6 +71,50 @@ def _qwen_device_map() -> str:
     except (ImportError, AttributeError):
         pass
     return "cpu"
+
+
+def _qwen_allow_cpu() -> bool:
+    raw = os.getenv("ML_QWEN_ALLOW_CPU", "false").strip().lower()
+    return raw in {"1", "true", "on", "yes"}
+
+
+def _qwen_allow_chat_cpu() -> bool:
+    raw = os.getenv("ML_QWEN_ALLOW_CHAT_CPU", "true").strip().lower()
+    return raw not in {"0", "false", "off", "no"}
+
+
+def _qwen_can_run_in_current_env() -> bool:
+    # The 1.5B instruct model is too slow for the default CPU-only dev path.
+    # Unless explicitly opted in, use template reasoning instead of letting
+    # request handlers stall for minutes or appear to crash locally.
+    device_map = _qwen_device_map()
+    if device_map == "cpu" and not _qwen_allow_cpu():
+        return False
+    return True
+
+
+def _qwen_can_run_chat_in_current_env() -> bool:
+    device_map = _qwen_device_map()
+    if device_map == "cpu" and not (_qwen_allow_cpu() or _qwen_allow_chat_cpu()):
+        return False
+    return True
+
+
+def _investment_chat_max_new_tokens() -> int:
+    raw = os.getenv(
+        "ML_QWEN_INVESTMENT_CHAT_MAX_NEW_TOKENS",
+        str(DEFAULT_INVESTMENT_CHAT_MAX_NEW_TOKENS),
+    ).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_INVESTMENT_CHAT_MAX_NEW_TOKENS
+    return max(16, min(value, 96))
+
+
+def _qwen_quantize_cpu_enabled() -> bool:
+    raw = os.getenv("ML_QWEN_QUANTIZE_CPU", "true").strip().lower()
+    return raw not in {"0", "false", "off", "no"}
 
 
 def _template_reasoning(
@@ -164,6 +206,16 @@ def _load_qwen():
             device_map=device_map,
             local_files_only=local_only,
         )
+        if device_map == "cpu" and _qwen_quantize_cpu_enabled():
+            try:
+                torch = import_module("torch")
+                _MODEL = torch.quantization.quantize_dynamic(
+                    _MODEL,
+                    {torch.nn.Linear},
+                    dtype=torch.qint8,
+                )
+            except Exception:
+                pass
         return _TOKENIZER, _MODEL
 
 
@@ -176,6 +228,11 @@ def _qwen_reasoning(
     headlines: list[str],
 ) -> ReasoningResult:
     if not _qwen_runtime_supported():
+        return ReasoningResult(
+            text=_template_reasoning(ticker, signal, confidence, sentiment, topics, headlines),
+            source="template",
+        )
+    if not _qwen_can_run_in_current_env():
         return ReasoningResult(
             text=_template_reasoning(ticker, signal, confidence, sentiment, topics, headlines),
             source="template",
@@ -213,7 +270,6 @@ def _qwen_reasoning(
                 **inputs,
                 max_new_tokens=180,
                 do_sample=False,
-                temperature=0.2,
                 pad_token_id=tokenizer.eos_token_id,
             )
 
@@ -258,6 +314,10 @@ def build_student_news_reasoning(
         text = _template_reasoning(ticker, signal, confidence, sentiment, topics, headlines)
         _store_cached_reasoning(key, text, "template")
         return ReasoningResult(text=text, source="template")
+    if not _qwen_can_run_in_current_env():
+        text = _template_reasoning(ticker, signal, confidence, sentiment, topics, headlines)
+        _store_cached_reasoning(key, text, "template")
+        return ReasoningResult(text=text, source="template")
 
     reasoning = _qwen_reasoning(ticker, signal, confidence, sentiment, topics, headlines)
     _store_cached_reasoning(key, reasoning.text, reasoning.source)
@@ -281,7 +341,11 @@ def build_investment_chat_reply(
     sector_text = ", ".join(sectors[:3]) if sectors else "no sector preference"
     ticker_text = ", ".join(tracked_tickers[:3]) if tracked_tickers else "none selected yet"
 
-    if not _use_qwen_enabled() or not _qwen_runtime_supported():
+    if (
+        not _use_qwen_enabled()
+        or not _qwen_runtime_supported()
+        or not _qwen_can_run_chat_in_current_env()
+    ):
         return ReasoningResult(
             text=(
                 f"I mapped your goal to a {model_profile} profile and selected: {ticker_text}. "
@@ -299,8 +363,8 @@ def build_investment_chat_reply(
         tokenizer, model = _load_qwen()
         qwen_prompt = (
             "You are TradeWise AI, a concise investing copilot for students. "
-            "Respond in 3-5 short sentences. Avoid guarantees and hype. "
-            "Briefly acknowledge risk and mention the selected 3 stocks.\n\n"
+            "Respond in exactly 2 short sentences. Avoid guarantees and hype. "
+            "Mention the selected 3 stocks once and briefly note risk.\n\n"
             f"User goal: {clean_prompt}\n"
             f"Risk profile: {model_profile}\n"
             f"Sectors inferred: {sector_text}\n"
@@ -312,9 +376,8 @@ def build_investment_chat_reply(
         with torch.no_grad() if torch is not None else nullcontext():
             output_ids = model.generate(
                 **inputs,
-                max_new_tokens=140,
+                max_new_tokens=_investment_chat_max_new_tokens(),
                 do_sample=False,
-                temperature=0.2,
                 pad_token_id=tokenizer.eos_token_id,
             )
 

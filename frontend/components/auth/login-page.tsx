@@ -115,7 +115,7 @@ export function LoginPage() {
             Sign in
           </h1>
           <p className="mt-1 text-sm text-zinc-600">
-            Access your watchlist and saved data after you sign in.
+            Save your trade workspace and paper-trading data after you sign in.
           </p>
         </div>
 

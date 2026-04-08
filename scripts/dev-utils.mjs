@@ -38,6 +38,9 @@ export function resolveBackendPython(rootDir, backendDir) {
 
   const venvCandidates = [
     ...preferredCandidates,
+    join(rootDir, ".venv312", pythonBinDir, pythonExecutable),
+    join(backendDir, "venv", pythonBinDir, pythonExecutable),
+    join(backendDir, "venv311", pythonBinDir, pythonExecutable),
     join(backendDir, ".venv", pythonBinDir, pythonExecutable),
     join(rootDir, ".venv", pythonBinDir, pythonExecutable),
   ];
@@ -97,7 +100,7 @@ export function getBackendStartupHelp(rootDir, backendDir) {
     `Checked: ${backendVenv} and ${repoVenv}`,
     preferredEnvName
       ? `Also checked preferred env: ${join(backendDir, preferredEnvName)}`
-      : "Tip: set ML_BACKEND_PYTHON_ENV=venv311 to force the Python 3.11 backend env.",
+      : "Tip: set ML_BACKEND_PYTHON_ENV=.venv312 to force the Python 3.12 backend env.",
     "Expected one of: a working virtualenv, `python3`, or `python` on PATH.",
     "Create or repair a virtualenv, then install backend requirements.",
   ].join("\n");

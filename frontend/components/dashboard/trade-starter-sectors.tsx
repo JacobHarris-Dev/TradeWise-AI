@@ -1,14 +1,13 @@
 "use client";
 
-import { startTransition, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
 import { useTradeWorkspaceActions } from "@/components/providers/trade-workspace-provider";
 import type { MockQuote, NewsReport } from "@/lib/mocks/stock-data";
 import {
   fetchNewsReport,
   fetchPaperAccount,
-  fetchStockQuote,
+  fetchStockQuotes,
   fetchStockRecommendations,
 } from "@/lib/stock-quote";
 import {
@@ -23,7 +22,6 @@ import {
 } from "@/lib/trade-workspace";
 
 export function TradeStarterSectors() {
-  const router = useRouter();
   const { user } = useAuth();
   const { hydrateWorkspace } = useTradeWorkspaceActions();
   const accountUserId = user?.uid ?? "guest";
@@ -32,8 +30,6 @@ export function TradeStarterSectors() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    router.prefetch("/trade");
-
     const stored = readStoredJson<string[]>(TRADE_STORAGE_KEYS.preferredSectors);
     if (!stored || !Array.isArray(stored)) {
       return;
@@ -52,7 +48,7 @@ export function TradeStarterSectors() {
     if (next.length) {
       setPreferredSectors(next);
     }
-  }, [router]);
+  }, []);
 
   useEffect(() => {
     writeStoredJson(TRADE_STORAGE_KEYS.preferredSectors, preferredSectors);
@@ -98,15 +94,11 @@ export function TradeStarterSectors() {
       const newsRefreshSeconds =
         refreshCadence === "15m" ? 900 : refreshCadence === "5m" ? 300 : 60;
 
-      const quoteResults = await Promise.allSettled(
-        tickers.map((ticker) => fetchStockQuote(ticker, { includeChart: false, modelProfile })),
-      );
-      const quotes: MockQuote[] = [];
-      for (const result of quoteResults) {
-        if (result.status === "fulfilled") {
-          quotes.push(result.value);
-        }
-      }
+      const quoteBatch = await fetchStockQuotes(tickers, {
+        includeChart: false,
+        modelProfile,
+      });
+      const quotes: MockQuote[] = quoteBatch.results;
 
       if (!quotes.length) {
         throw new Error("Could not preload the starter stock quotes.");
@@ -144,10 +136,6 @@ export function TradeStarterSectors() {
         autoTradeResult: null,
         lastAction: `Loaded ${quotes.map((quote) => quote.ticker).join(", ")} from your starter sectors.`,
       });
-
-      startTransition(() => {
-        router.push("/trade");
-      });
     } catch (err) {
       setError(
         err instanceof Error
@@ -165,7 +153,7 @@ export function TradeStarterSectors() {
         <div>
           <h2 className="text-lg font-semibold text-zinc-900">Starter sectors</h2>
           <p className="mt-1 max-w-2xl text-sm text-zinc-600">
-            Choose up to three sectors and preload the Trade workspace with three starter stocks before you open it.
+            Choose up to three sectors and preload this Trade workspace with a starter basket picked from the model-backed stock universe.
           </p>
         </div>
         <div className="rounded-full border border-zinc-200 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
@@ -200,10 +188,10 @@ export function TradeStarterSectors() {
           disabled={loading || !preferredSectors.length}
           className="rounded-xl bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
         >
-          {loading ? "Loading trade workspace..." : "Open Trade with 3 stocks"}
+          {loading ? "Loading starter basket..." : "Load 3 starter stocks"}
         </button>
         <p className="text-xs text-zinc-500">
-          This preloads the trade basket before the route opens.
+          This updates the tracked basket on the current page.
         </p>
       </div>
 

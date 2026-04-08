@@ -7,12 +7,29 @@ integration work.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-DEFAULT_MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
+DEFAULT_MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
+
+
+def _load_token(args: argparse.Namespace) -> str | None:
+    if args.token:
+        return args.token.strip() or None
+
+    for env_var in (
+        "HF_TOKEN",
+        "HUGGINGFACE_TOKEN",
+        "HUGGINGFACE_HUB_TOKEN",
+    ):
+        value = os.getenv(env_var, "").strip()
+        if value:
+            return value
+
+    return None
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,23 +66,42 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Download only the tokenizer for a lighter smoke test.",
     )
+    parser.add_argument(
+        "--token",
+        default=None,
+        help="Optional Hugging Face access token. If omitted, common HF token env vars are used.",
+    )
+    parser.add_argument(
+        "--enable-hf-transfer",
+        action="store_true",
+        help="Enable HF transfer acceleration when the hf_transfer package is installed.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     cache_dir = Path(args.cache_dir).expanduser().resolve() if args.cache_dir else None
+    token = _load_token(args)
+
+    if args.enable_hf_transfer:
+        os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
 
     print(f"Torch runtime: {torch.__version__}")
     print(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         print(f"CUDA device: {torch.cuda.get_device_name(0)}")
+    if token:
+        print("Hugging Face token: enabled")
+    if args.enable_hf_transfer:
+        print("HF transfer acceleration: enabled")
 
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_name,
         cache_dir=str(cache_dir) if cache_dir else None,
         revision=args.revision,
         trust_remote_code=args.trust_remote_code,
+        token=token,
     )
     print(f"Tokenizer ready: {args.model_name}")
     print(f"Tokenizer class: {tokenizer.__class__.__name__}")
@@ -81,6 +117,7 @@ def main() -> None:
         device_map=args.device_map,
         torch_dtype="auto",
         trust_remote_code=args.trust_remote_code,
+        token=token,
     )
     print(f"Model ready: {args.model_name}")
     print(f"Model class: {model.__class__.__name__}")

@@ -30,7 +30,6 @@ export async function upsertUserDocument(user: User) {
     { merge: true },
   );
 }
-
 const TICKER_RE = /^[A-Z0-9.\-]{1,16}$/;
 const TICKER_ALIASES: Record<string, string> = {
   APPL: "AAPL",
