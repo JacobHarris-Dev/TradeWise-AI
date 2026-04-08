@@ -45,6 +45,7 @@ function formatMoney(value: number) {
 }
 
 export function PortfolioPage() {
+  const { simulationSnapshot } = useTradeWorkspace();
   const {
     portfolio,
     portfolioLoading: loading,
@@ -55,16 +56,46 @@ export function PortfolioPage() {
   const [featuredQuotes, setFeaturedQuotes] = useState<MockQuote[]>([]);
   const [featuredLoading, setFeaturedLoading] = useState(true);
 
-  const positionRows = useMemo(() => portfolio?.positions ?? [], [portfolio]);
+  const positionRows = useMemo(() => {
+    if (simulationSnapshot) {
+      return simulationSnapshot.positions.map((position) => ({
+        ticker: position.symbol,
+        shares: position.shares,
+        marketValue: position.value,
+      }));
+    }
+    return portfolio?.positions ?? [];
+  }, [portfolio, simulationSnapshot]);
+
+  const cashValue = simulationSnapshot?.cash ?? portfolio?.cash ?? 0;
+  const positionsValue =
+    simulationSnapshot
+      ? simulationSnapshot.portfolioValue - simulationSnapshot.cash
+      : portfolio?.positionsValue ?? 0;
+  const totalEquityValue =
+    simulationSnapshot?.portfolioValue ?? portfolio?.totalEquity ?? 0;
 
   const allocationRows = useMemo(() => {
+    if (simulationSnapshot) {
+      return [
+        ...(simulationSnapshot.cash > 0
+          ? [{ ticker: "Cash", value: simulationSnapshot.cash }]
+          : []),
+        ...simulationSnapshot.positions.map((position) => ({
+          ticker: position.symbol,
+          value: position.value,
+          shares: position.shares,
+        })),
+      ];
+    }
     if (!portfolio) {
       return [];
     }
 
-    const rows = positionRows.map((position) => ({
+    const rows: { ticker: string; value: number; shares?: number }[] = positionRows.map((position) => ({
       ticker: position.ticker,
       value: position.marketValue,
+      shares: position.shares,
     }));
 
     if (portfolio.cash > 0) {
@@ -72,7 +103,7 @@ export function PortfolioPage() {
     }
 
     return rows;
-  }, [portfolio, positionRows]);
+  }, [portfolio, positionRows, simulationSnapshot]);
 
   const featuredSymbols = useMemo(() => {
     return Array.from(

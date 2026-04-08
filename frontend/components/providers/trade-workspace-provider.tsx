@@ -10,6 +10,11 @@ import {
   useState,
 } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
+import {
+  saveTradingState,
+  subscribeToTradingState,
+  type PersistedTradingState,
+} from "@/lib/firestore";
 import { getMlBackendWebSocketUrl } from "@/lib/ml/backend-ws";
 import type {
   AutoTradeResult,
@@ -32,6 +37,9 @@ import {
   fetchWatchSession,
 } from "@/lib/stock-quote";
 import {
+  createSimulationFromQuotes,
+  executeTrade,
+  getSimulationSnapshot,
   isTradeWorkspaceFresh,
   MAX_TRACKED_TICKERS,
   readStoredJson,
@@ -41,10 +49,13 @@ import {
   readTradeWorkspace,
   TRADE_STORAGE_KEYS,
   type TradeMode,
+  type TradingSimulation,
+  type SimulationSnapshot,
   type TradeWorkspaceSnapshot,
   writeStoredJson,
   writeStoredString,
   writeTradeWorkspace,
+  shiftSimulationTime,
 } from "@/lib/trade-workspace";
 
 const CADENCE_MS: Record<RefreshCadence, number> = {
@@ -147,6 +158,10 @@ type TradeWorkspaceContextValue = {
   lastTickAt: string | null;
   clock: Date;
   marketSnapshot: { isOpen: boolean; statusLabel: string };
+  simulation: TradingSimulation | null;
+  simulationSnapshot: SimulationSnapshot | null;
+  advanceSimulationTime: (deltaSteps: number) => void;
+  resetSimulationTime: () => void;
   setTradeMode: (next: TradeMode) => void;
   setModelProfile: (next: ModelProfile) => void;
   setRefreshCadence: (next: RefreshCadence) => void;
@@ -165,7 +180,7 @@ type TradeWorkspaceContextValue = {
   }) => Promise<void>;
   runAutoTrade: () => Promise<void>;
   loadMockTradingDay: () => Promise<void>;
-  simulateOrder: (side: "buy" | "sell") => void;
+  simulateOrder: (side: "buy" | "sell", shares: number) => void;
   clearPaperTradeLog: () => void;
   setLastAction: (message: string | null) => void;
 };
@@ -242,6 +257,10 @@ export function TradeWorkspaceProvider({
 
   const marketSnapshot = useMemo(() => getEasternMarketSnapshot(clock), [clock]);
   const newsRefreshSeconds = refreshSecondsForCadence(refreshCadence);
+  const simulationSnapshot = useMemo(
+    () => (simulation ? getSimulationSnapshot(simulation) : null),
+    [simulation],
+  );
 
   const applyWorkspaceSnapshot = useCallback(
     (
@@ -368,6 +387,102 @@ export function TradeWorkspaceProvider({
 
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!user?.uid) {
+      setPersistedTradingState(null);
+      setHasHydratedPersistedState(false);
+      return;
+    }
+    return subscribeToTradingState(
+      user.uid,
+      (next) => {
+        setPersistedTradingState(next);
+      },
+      (error) => {
+        console.error("Trading-state sync disabled:", error);
+      },
+    );
+  }, [user?.uid]);
+
+  useEffect(() => {
+    if (!persistedTradingState) {
+      return;
+    }
+    const persistedSymbols = Object.keys(persistedTradingState.positions);
+    if (!persistedSymbols.length) {
+      return;
+    }
+    setTrackedTickers((current) => {
+      if (current.length) {
+        return current;
+      }
+      const next = normalizeTrackedTickers(persistedSymbols);
+      if (!selectedTicker && next.length) {
+        setSelectedTicker(next[0]);
+      }
+      return next;
+    });
+  }, [persistedTradingState, selectedTicker]);
+
+  useEffect(() => {
+    if (!preferencesLoaded) {
+      return;
+    }
+    if (!Object.keys(quotesByTicker).length) {
+      setSimulation(null);
+      return;
+    }
+
+    setSimulation((current) => {
+      const created = createSimulationFromQuotes(quotesByTicker, clock, selectedTicker);
+      if (!hasHydratedPersistedState && persistedTradingState) {
+        const next = {
+          ...created,
+          cash: persistedTradingState.cash,
+          positions: persistedTradingState.positions,
+          trades: persistedTradingState.trades,
+          simulationTime:
+            persistedTradingState.simulationTime ?? created.simulationTime,
+        };
+        setHasHydratedPersistedState(true);
+        return next;
+      }
+      if (!current) {
+        return created;
+      }
+      return {
+        ...current,
+        priceTimelineBySymbol: created.priceTimelineBySymbol,
+        simulationTime: created.priceTimelineBySymbol[selectedTicker]?.length
+          ? current.simulationTime
+          : created.simulationTime,
+      };
+    });
+  }, [
+    clock,
+    hasHydratedPersistedState,
+    persistedTradingState,
+    preferencesLoaded,
+    quotesByTicker,
+    selectedTicker,
+  ]);
+
+  useEffect(() => {
+    if (!user?.uid || !simulation) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void saveTradingState(user.uid, {
+        cash: simulation.cash,
+        positions: simulation.positions,
+        trades: simulation.trades,
+        simulationTime: simulation.simulationTime,
+      });
+    }, WORKSPACE_PERSIST_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [simulation, user?.uid]);
 
   const refreshPortfolio = useCallback(
     async (options: { background?: boolean } = {}) => {
@@ -875,15 +990,59 @@ export function TradeWorkspaceProvider({
   }, [modelProfile, selectedTicker, trackedTickers]);
 
   const simulateOrder = useCallback(
-    (side: "buy" | "sell") => {
+    (side: "buy" | "sell", shares: number) => {
       const orderTicker =
-        quotesByTicker[selectedTicker]?.ticker ?? (selectedTicker || "-");
-      setLastAction(
-        `${side === "buy" ? "Buy" : "Sell"} simulated - no order sent. (Ticker: ${orderTicker})`,
+        quotesByTicker[selectedTicker]?.ticker ?? (selectedTicker || "");
+      if (!orderTicker) {
+        setLastAction("Select a ticker before placing a trade.");
+        return;
+      }
+      if (!simulation) {
+        setLastAction("Simulation is still loading price history.");
+        return;
+      }
+      try {
+        const next = executeTrade(simulation, orderTicker, shares, side);
+        setSimulation(next);
+        const trade = next.trades[next.trades.length - 1];
+        setLastAction(
+          `${side === "buy" ? "Bought" : "Sold"} ${trade.shares} ${trade.symbol} @ $${trade.price.toFixed(2)} (sim ${new Date(trade.timestamp).toLocaleString()})`,
+        );
+      } catch (err) {
+        setLastAction(err instanceof Error ? err.message : "Trade failed.");
+      }
+    },
+    [quotesByTicker, selectedTicker, simulation],
+  );
+
+  const advanceSimulationTime = useCallback(
+    (deltaSteps: number) => {
+      const symbol = selectedTicker || trackedTickers[0];
+      if (!symbol) {
+        return;
+      }
+      setSimulation((current) =>
+        current ? shiftSimulationTime(current, symbol, deltaSteps) : current,
       );
     },
-    [quotesByTicker, selectedTicker],
+    [selectedTicker, trackedTickers],
   );
+
+  const resetSimulationTime = useCallback(() => {
+    if (!simulation) return;
+    const symbol = selectedTicker || trackedTickers[0];
+    if (!symbol) return;
+    const points = simulation.priceTimelineBySymbol[symbol] ?? [];
+    if (!points.length) return;
+    setSimulation((current) =>
+      current
+        ? {
+            ...current,
+            simulationTime: points[points.length - 1].time,
+          }
+        : current,
+    );
+  }, [selectedTicker, simulation, trackedTickers]);
 
   const clearPaperTradeLog = useCallback(() => {
     setPaperTradeLog([]);
@@ -966,6 +1125,10 @@ export function TradeWorkspaceProvider({
       lastTickAt,
       clock,
       marketSnapshot,
+      simulation,
+      simulationSnapshot,
+      advanceSimulationTime,
+      resetSimulationTime,
       setTradeMode,
       setModelProfile,
       setRefreshCadence,
@@ -1013,6 +1176,10 @@ export function TradeWorkspaceProvider({
       lastTickAt,
       clock,
       marketSnapshot,
+      simulation,
+      simulationSnapshot,
+      advanceSimulationTime,
+      resetSimulationTime,
       setTradeMode,
       setModelProfile,
       setRefreshCadence,

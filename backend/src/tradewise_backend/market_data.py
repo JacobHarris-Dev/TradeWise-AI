@@ -14,15 +14,32 @@ try:
 except ImportError:  # pragma: no cover - exercised only when yfinance is missing
     yf = None
 
+# Import each submodule separately so one failure does not null out the rest (e.g. timeframe
+# must work for intraday bars even if another submodule fails to load).
+DataFeed = None
+StockHistoricalDataClient = None
+StockBarsRequest = None
+TimeFrame = None
+TimeFrameUnit = None
+
 try:
     from alpaca.data.enums import DataFeed
-    from alpaca.data.historical import StockHistoricalDataClient
-    from alpaca.data.requests import StockBarsRequest
-    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 except ImportError:  # pragma: no cover - exercised only when alpaca-py is missing
     DataFeed = None
-    StockBarsRequest = None
+
+try:
+    from alpaca.data.historical import StockHistoricalDataClient
+except ImportError:  # pragma: no cover
     StockHistoricalDataClient = None
+
+try:
+    from alpaca.data.requests import StockBarsRequest
+except ImportError:  # pragma: no cover
+    StockBarsRequest = None
+
+try:
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+except ImportError:  # pragma: no cover
     TimeFrame = None
     TimeFrameUnit = None
 
@@ -290,6 +307,11 @@ def _parse_datetime(value: str | None) -> datetime | None:
 
 
 def _parse_alpaca_timeframe(interval: str) -> TimeFrame:
+    if TimeFrame is None or TimeFrameUnit is None:
+        raise RuntimeError(
+            "Alpaca timeframe types failed to load. Install alpaca-py (pip install alpaca-py) "
+            "and ensure imports from alpaca.data.timeframe succeed for intervals like 15m."
+        )
     normalized = interval.strip().lower()
     if normalized.endswith("m"):
         amount = int(normalized[:-1])
