@@ -2,6 +2,7 @@ import type {
   AutoTradeBatchResult,
   AutoTradeResult,
   NewsReport,
+  InvestmentChatResponse,
   PaperAccount,
   PaperAccountPerformance,
   PriceSnapshot,
@@ -31,7 +32,7 @@ export async function fetchStockQuote(
 
   const params = new URLSearchParams({
     ticker: normalized,
-    includeChart: options.includeChart === false ? "false" : "true",
+    includeChart: options.includeChart === true ? "true" : "false",
   });
   if (options.modelProfile) {
     params.set("modelProfile", options.modelProfile);
@@ -328,6 +329,29 @@ export async function fetchNewsReport(
   }
 
   return (await response.json()) as NewsReport;
+}
+
+export async function fetchInvestmentChatResponse(payload: {
+  prompt: string;
+  modelProfile: ModelProfile;
+  sectors: string[];
+  trackedTickers: string[];
+}): Promise<InvestmentChatResponse> {
+  const response = await fetch("/api/ml/investment-chat", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    cache: "no-store",
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response);
+    throw new Error(message || "Could not generate AI investment response.");
+  }
+
+  return (await response.json()) as InvestmentChatResponse;
 }
 
 async function readErrorMessage(response: Response) {

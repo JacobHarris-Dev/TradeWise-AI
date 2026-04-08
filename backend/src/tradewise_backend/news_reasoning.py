@@ -262,3 +262,73 @@ def build_student_news_reasoning(
     reasoning = _qwen_reasoning(ticker, signal, confidence, sentiment, topics, headlines)
     _store_cached_reasoning(key, reasoning.text, reasoning.source)
     return reasoning
+
+
+def build_investment_chat_reply(
+    *,
+    prompt: str,
+    model_profile: str,
+    sectors: list[str],
+    tracked_tickers: list[str],
+) -> ReasoningResult:
+    clean_prompt = prompt.strip()
+    if not clean_prompt:
+        return ReasoningResult(
+            text="Tell me your investing goal and I can suggest three stocks to track.",
+            source="template",
+        )
+
+    sector_text = ", ".join(sectors[:3]) if sectors else "no sector preference"
+    ticker_text = ", ".join(tracked_tickers[:3]) if tracked_tickers else "none selected yet"
+
+    if not _use_qwen_enabled() or not _qwen_runtime_supported():
+        return ReasoningResult(
+            text=(
+                f"I mapped your goal to a {model_profile} profile and selected: {ticker_text}. "
+                f"Focus sectors: {sector_text}. I can now track these 3 and explain each signal."
+            ),
+            source="template",
+        )
+
+    try:
+        torch = import_module("torch")
+    except ImportError:
+        torch = None
+
+    try:
+        tokenizer, model = _load_qwen()
+        qwen_prompt = (
+            "You are TradeWise AI, a concise investing copilot for students. "
+            "Respond in 3-5 short sentences. Avoid guarantees and hype. "
+            "Briefly acknowledge risk and mention the selected 3 stocks.\n\n"
+            f"User goal: {clean_prompt}\n"
+            f"Risk profile: {model_profile}\n"
+            f"Sectors inferred: {sector_text}\n"
+            f"Selected stocks: {ticker_text}\n\n"
+            "Assistant reply:"
+        )
+
+        inputs = tokenizer(qwen_prompt, return_tensors="pt", truncation=True, max_length=2048)
+        with torch.no_grad() if torch is not None else nullcontext():
+            output_ids = model.generate(
+                **inputs,
+                max_new_tokens=140,
+                do_sample=False,
+                temperature=0.2,
+                pad_token_id=tokenizer.eos_token_id,
+            )
+
+        generated = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        reply = generated[len(qwen_prompt):].strip() if generated.startswith(qwen_prompt) else generated.strip()
+        if reply:
+            return ReasoningResult(text=reply, source="qwen")
+    except Exception:
+        pass
+
+    return ReasoningResult(
+        text=(
+            f"I mapped your goal to a {model_profile} profile and selected: {ticker_text}. "
+            f"Focus sectors: {sector_text}. I can now track these 3 and explain each signal."
+        ),
+        source="template",
+    )

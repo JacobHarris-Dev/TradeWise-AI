@@ -9,7 +9,7 @@ type BrandWordmarkProps = {
 
 /** Header wordmark: optional icon + two-tone TradeWise text (matches brand colors). */
 export function BrandWordmark({
-  href = "/dashboard",
+  href = "/",
   showIcon = true,
   className = "",
 }: BrandWordmarkProps) {

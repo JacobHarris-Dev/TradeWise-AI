@@ -1,12 +1,10 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { AiDisclaimer } from "@/components/layout/ai-disclaimer";
 import { HoldingCard } from "@/components/portfolio/holding-card";
-import { useAuth } from "@/components/providers/auth-provider";
-import type { PaperAccountPerformance } from "@/lib/mocks/stock-data";
-import { fetchPaperAccountPerformance } from "@/lib/stock-quote";
+import { usePortfolioWorkspace } from "@/components/providers/trade-workspace-provider";
 
 const PortfolioAllocationChart = dynamic(
   () =>
@@ -24,50 +22,16 @@ const PortfolioGrowthChart = dynamic(
   { ssr: false },
 );
 
-const PORTFOLIO_REFRESH_MS = 30000;
-
 /**
  * Portfolio: live paper-account holdings linked to the Trade tab.
  */
 export function PortfolioPage() {
-  const { user } = useAuth();
-  const accountUserId = user?.uid ?? "guest";
-  const [portfolio, setPortfolio] = useState<PaperAccountPerformance | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const refreshAccount = useCallback(
-    async (options: { background?: boolean } = {}) => {
-      if (!options.background) {
-        setLoading(true);
-      }
-
-      try {
-        const next = await fetchPaperAccountPerformance(accountUserId);
-        setPortfolio(next);
-        setError(null);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Could not load portfolio.");
-      } finally {
-        if (!options.background) {
-          setLoading(false);
-        }
-      }
-    },
-    [accountUserId],
-  );
-
-  useEffect(() => {
-    void refreshAccount();
-  }, [refreshAccount]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      void refreshAccount({ background: true });
-    }, PORTFOLIO_REFRESH_MS);
-
-    return () => window.clearInterval(timer);
-  }, [refreshAccount]);
+  const {
+    portfolio,
+    portfolioLoading: loading,
+    portfolioError: error,
+    refreshPortfolio,
+  } = usePortfolioWorkspace();
 
   const positionRows = useMemo(
     () => portfolio?.positions ?? [],
@@ -101,8 +65,7 @@ export function PortfolioPage() {
           Portfolio
         </h1>
         <p className="mt-1 text-sm text-zinc-500">
-          Linked to paper trades for{" "}
-          {accountUserId === "guest" ? "guest mode" : "your signed-in account"}.
+          Linked to your active paper-trading workspace.
         </p>
       </div>
 
@@ -168,7 +131,7 @@ export function PortfolioPage() {
             </div>
             <button
               type="button"
-              onClick={() => void refreshAccount()}
+              onClick={() => void refreshPortfolio()}
               className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
             >
               Refresh

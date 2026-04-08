@@ -217,6 +217,36 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(body["newsSentiment"], "positive")
         self.assertEqual(body["newsTopics"], ["ai", "products"])
 
+    def test_investment_chat_returns_template_fallback(self) -> None:
+        with patch(
+            "tradewise_backend.main.build_investment_chat_reply",
+            return_value=type(
+                "Reasoning",
+                (),
+                {
+                    "text": "I mapped your goal to a balanced profile and selected: AAPL, MSFT, NVDA.",
+                    "source": "template",
+                },
+            )(),
+        ):
+            response = self.client.post(
+                "/v1/investment-chat",
+                json={
+                    "prompt": "Help me build a tech watchlist.",
+                    "modelProfile": "neutral",
+                    "sectors": ["technology"],
+                    "trackedTickers": ["AAPL", "MSFT", "NVDA"],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(
+            body["reply"],
+            "I mapped your goal to a balanced profile and selected: AAPL, MSFT, NVDA.",
+        )
+        self.assertEqual(body["source"], "template")
+
     def test_price_snapshots_contract(self) -> None:
         with patch(
             "tradewise_backend.main.build_price_snapshots",
@@ -240,19 +270,25 @@ class ApiTestCase(unittest.TestCase):
                     ticker="AAPL",
                     company_name="Apple Inc.",
                     sector="Technology",
+                    industry="Consumer Electronics",
                     priority=10,
+                    is_student_friendly=True,
                 ),
                 StockUniverseRow(
                     ticker="MSFT",
                     company_name="Microsoft Corp.",
                     sector="Technology",
+                    industry="Software Infrastructure",
                     priority=11,
+                    is_student_friendly=True,
                 ),
                 StockUniverseRow(
                     ticker="VOO",
                     company_name="Vanguard S&P 500 ETF",
                     sector="ETF",
+                    industry="Broad Market ETF",
                     priority=1,
+                    is_student_friendly=True,
                 ),
             ],
         ):

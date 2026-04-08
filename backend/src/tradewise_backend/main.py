@@ -6,7 +6,7 @@ from .engine import build_price_snapshots, build_quote_response
 from .live_stream import relay_live_trade_stream
 from .mock_trading import DEFAULT_MOCK_STEPS, MAX_MOCK_STEPS, MIN_MOCK_STEPS, build_mock_trading_day_response
 from .news import build_news_context_snapshot
-from .news_reasoning import build_student_news_reasoning
+from .news_reasoning import build_investment_chat_reply, build_student_news_reasoning
 from .paper_account import get_paper_account, grant_paper_position
 from .paper_portfolio import build_paper_account_performance
 from .paper_trading import execute_auto_trade, execute_auto_trade_batch
@@ -16,6 +16,8 @@ from .schemas import (
     AutoTradeBatchResponse,
     AutoTradeRequest,
     AutoTradeResponse,
+    InvestmentChatRequest,
+    InvestmentChatResponse,
     MockTradingDayResponse,
     NewsReportResponse,
     PaperPositionGrantRequest,
@@ -112,6 +114,20 @@ def analyze_quote(payload: AnalyzeRequest) -> QuoteResponse:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/v1/investment-chat", response_model=InvestmentChatResponse)
+def investment_chat(payload: InvestmentChatRequest) -> InvestmentChatResponse:
+    try:
+        result = build_investment_chat_reply(
+            prompt=payload.prompt,
+            model_profile=payload.modelProfile,
+            sectors=payload.sectors,
+            tracked_tickers=payload.trackedTickers,
+        )
+        return InvestmentChatResponse(reply=result.text, source=result.source)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/v1/news-report", response_model=NewsReportResponse)

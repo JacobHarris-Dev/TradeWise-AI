@@ -12,8 +12,14 @@ for candidate in (ROOT_DIR, SRC_DIR):
         sys.path.insert(0, str(candidate))
 
 from tradewise_backend.market_data import download_price_history
+from tradewise_backend.stock_universe import list_stock_universe_tickers
 
-DEFAULT_TICKERS = ("AAPL", "MSFT", "GOOGL", "NVDA", "SPY", "QQQ")
+LEGACY_DEFAULT_TICKERS = ("AAPL", "MSFT", "GOOGL", "NVDA", "SPY", "QQQ")
+
+
+def get_default_training_tickers() -> tuple[str, ...]:
+    tickers = list_stock_universe_tickers(student_friendly_only=False)
+    return tickers or LEGACY_DEFAULT_TICKERS
 
 
 def load_price_history(

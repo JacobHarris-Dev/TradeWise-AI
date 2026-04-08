@@ -106,7 +106,7 @@ export function LoginPage() {
       <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm">
         <div className="mb-8 text-center">
           <Link
-            href="/dashboard"
+            href="/"
             className="inline-block rounded-lg outline-none ring-offset-2 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-white"
           >
             <BrandLogo priority />
@@ -230,12 +230,11 @@ export function LoginPage() {
 
         <p className="mt-6 text-center text-sm text-zinc-500">
           <Link
-            href="/dashboard"
+            href="/"
             className="font-medium text-zinc-700 underline"
           >
-            Continue to dashboard
-          </Link>{" "}
-          (demo data when not signed in)
+            View homepage
+          </Link>
         </p>
       </div>
     </div>

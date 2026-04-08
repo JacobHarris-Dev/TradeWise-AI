@@ -3,6 +3,7 @@
 import { startTransition, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/providers/auth-provider";
+import { useTradeWorkspaceActions } from "@/components/providers/trade-workspace-provider";
 import type { MockQuote, NewsReport } from "@/lib/mocks/stock-data";
 import {
   fetchNewsReport,
@@ -19,12 +20,12 @@ import {
   SECTOR_OPTIONS,
   TRADE_STORAGE_KEYS,
   writeStoredJson,
-  writeTradeWorkspace,
 } from "@/lib/trade-workspace";
 
 export function TradeStarterSectors() {
   const router = useRouter();
   const { user } = useAuth();
+  const { hydrateWorkspace } = useTradeWorkspaceActions();
   const accountUserId = user?.uid ?? "guest";
   const [preferredSectors, setPreferredSectors] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -132,7 +133,7 @@ export function TradeStarterSectors() {
         TRADE_STORAGE_KEYS.trackedTickers,
         quotes.map((quote) => quote.ticker),
       );
-      writeTradeWorkspace({
+      hydrateWorkspace({
         savedAt: Date.now(),
         trackedTickers: quotes.map((quote) => quote.ticker),
         selectedTicker,

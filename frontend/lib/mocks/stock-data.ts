@@ -135,6 +135,11 @@ export type NewsReport = {
   newsHeadlines: string[];
 };
 
+export type InvestmentChatResponse = {
+  reply: string;
+  source: "qwen" | "template";
+};
+
 export type PaperAccountPosition = {
   ticker: string;
   shares: number;

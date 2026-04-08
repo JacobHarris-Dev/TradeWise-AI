@@ -30,7 +30,7 @@ for candidate in (ROOT_DIR, SRC_DIR):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-from training.data import DEFAULT_TICKERS, load_price_history
+from training.data import get_default_training_tickers, load_price_history
 from tradewise_backend.features import DEFAULT_ANNUAL_RATE, DISCOUNT_DAYS, FEATURE_COLUMNS, build_training_frame, discount_factor
 from tradewise_backend.model_runtime import ModelBundle, get_model_artifact_path, save_model_bundle
 from tradewise_backend.schemas import ModelProfile, SignalLabel
@@ -340,7 +340,7 @@ def _prepare_dataset(
         return dataset, "csv", str(Path(args.dataset_csv).resolve())
 
     dataset = build_dataset(
-        tickers=args.tickers,
+        tickers=args.tickers or list(get_default_training_tickers()),
         start=args.start,
         end=args.end,
         period=args.period,
@@ -411,8 +411,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tickers",
         nargs="+",
-        default=list(DEFAULT_TICKERS),
-        help="Tickers to include in the training set.",
+        default=None,
+        help="Optional explicit tickers to include in the training set. When omitted, the stock universe CSV is used.",
     )
     parser.add_argument(
         "--provider",

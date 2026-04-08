@@ -75,6 +75,18 @@ class NewsReportResponse(BaseModel):
     newsHeadlines: list[str] = Field(default_factory=list)
 
 
+class InvestmentChatRequest(BaseModel):
+    prompt: str = Field(min_length=3, max_length=1200)
+    modelProfile: ModelProfile = "neutral"
+    sectors: list[str] = Field(default_factory=list)
+    trackedTickers: list[str] = Field(default_factory=list)
+
+
+class InvestmentChatResponse(BaseModel):
+    reply: str
+    source: Literal["qwen", "template"] = "template"
+
+
 class AnalyzeRequest(BaseModel):
     ticker: str
     includeChart: bool = False
