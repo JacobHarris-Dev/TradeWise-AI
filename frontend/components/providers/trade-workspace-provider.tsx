@@ -10,6 +10,11 @@ import {
   useState,
 } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
+import {
+  saveTradingState,
+  subscribeToTradingState,
+  type PersistedTradingState,
+} from "@/lib/firestore";
 import { getMlBackendWebSocketUrl } from "@/lib/ml/backend-ws";
 import type {
   AutoTradeResult,
@@ -245,6 +250,10 @@ export function TradeWorkspaceProvider({
   const [lastTickAt, setLastTickAt] = useState<string | null>(null);
   const [clock, setClock] = useState(() => new Date());
   const [simulation, setSimulation] = useState<TradingSimulation | null>(null);
+  const [persistedTradingState, setPersistedTradingState] =
+    useState<PersistedTradingState | null>(null);
+  const [hasHydratedPersistedState, setHasHydratedPersistedState] =
+    useState(false);
   const skipInitialQuotesRefreshRef = useRef(false);
   const skipInitialPaperAccountRefreshRef = useRef(false);
   const skipInitialNewsRefreshRef = useRef(false);
@@ -383,6 +392,43 @@ export function TradeWorkspaceProvider({
   }, []);
 
   useEffect(() => {
+    if (!user?.uid) {
+      setPersistedTradingState(null);
+      setHasHydratedPersistedState(false);
+      return;
+    }
+    return subscribeToTradingState(
+      user.uid,
+      (next) => {
+        setPersistedTradingState(next);
+      },
+      (error) => {
+        console.error("Trading-state sync disabled:", error);
+      },
+    );
+  }, [user?.uid]);
+
+  useEffect(() => {
+    if (!persistedTradingState) {
+      return;
+    }
+    const persistedSymbols = Object.keys(persistedTradingState.positions);
+    if (!persistedSymbols.length) {
+      return;
+    }
+    setTrackedTickers((current) => {
+      if (current.length) {
+        return current;
+      }
+      const next = normalizeTrackedTickers(persistedSymbols);
+      if (!selectedTicker && next.length) {
+        setSelectedTicker(next[0]);
+      }
+      return next;
+    });
+  }, [persistedTradingState, selectedTicker]);
+
+  useEffect(() => {
     if (!preferencesLoaded) {
       return;
     }
@@ -393,6 +439,18 @@ export function TradeWorkspaceProvider({
 
     setSimulation((current) => {
       const created = createSimulationFromQuotes(quotesByTicker, clock, selectedTicker);
+      if (!hasHydratedPersistedState && persistedTradingState) {
+        const next = {
+          ...created,
+          cash: persistedTradingState.cash,
+          positions: persistedTradingState.positions,
+          trades: persistedTradingState.trades,
+          simulationTime:
+            persistedTradingState.simulationTime ?? created.simulationTime,
+        };
+        setHasHydratedPersistedState(true);
+        return next;
+      }
       if (!current) {
         return created;
       }
@@ -404,7 +462,30 @@ export function TradeWorkspaceProvider({
           : created.simulationTime,
       };
     });
-  }, [clock, preferencesLoaded, quotesByTicker, selectedTicker]);
+  }, [
+    clock,
+    hasHydratedPersistedState,
+    persistedTradingState,
+    preferencesLoaded,
+    quotesByTicker,
+    selectedTicker,
+  ]);
+
+  useEffect(() => {
+    if (!user?.uid || !simulation) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void saveTradingState(user.uid, {
+        cash: simulation.cash,
+        positions: simulation.positions,
+        trades: simulation.trades,
+        simulationTime: simulation.simulationTime,
+      });
+    }, WORKSPACE_PERSIST_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [simulation, user?.uid]);
 
   const refreshPortfolio = useCallback(
     async (options: { background?: boolean } = {}) => {

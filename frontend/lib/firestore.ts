@@ -77,3 +77,75 @@ export function subscribeToWatchlist(
     );
   });
 }
+
+export type PersistedTradingState = {
+  cash: number;
+  positions: Record<string, number>;
+  trades: {
+    symbol: string;
+    shares: number;
+    price: number;
+    type: "buy" | "sell";
+    timestamp: string;
+  }[];
+  simulationTime: string | null;
+  updatedAt?: string | null;
+};
+
+function tradingStateRef(userId: string) {
+  return doc(db, "tradingState", userId);
+}
+
+/** Persist wallet + positions + trade history for cross-session restore. */
+export async function saveTradingState(
+  userId: string,
+  state: PersistedTradingState,
+) {
+  await setDoc(
+    tradingStateRef(userId),
+    {
+      userId,
+      cash: Number(state.cash.toFixed(2)),
+      positions: state.positions,
+      trades: state.trades,
+      simulationTime: state.simulationTime,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
+}
+
+/** Subscribe to persisted user trading state. */
+export function subscribeToTradingState(
+  userId: string,
+  onState: (state: PersistedTradingState | null) => void,
+  onError?: (error: Error) => void,
+): Unsubscribe {
+  return onSnapshot(
+    tradingStateRef(userId),
+    (snap) => {
+      if (!snap.exists()) {
+        onState(null);
+        return;
+      }
+      const data = snap.data();
+      onState({
+        cash: typeof data.cash === "number" ? data.cash : 10_000,
+        positions: (data.positions as Record<string, number> | undefined) ?? {},
+        trades:
+          (data.trades as PersistedTradingState["trades"] | undefined) ?? [],
+        simulationTime:
+          typeof data.simulationTime === "string" ? data.simulationTime : null,
+        updatedAt:
+          data.updatedAt && typeof data.updatedAt.toDate === "function"
+            ? data.updatedAt.toDate().toISOString()
+            : null,
+      });
+    },
+    (error) => {
+      onError?.(error);
+      // Keep the app usable even if rules are not published yet.
+      onState(null);
+    },
+  );
+}
