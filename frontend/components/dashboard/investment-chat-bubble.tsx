@@ -77,8 +77,7 @@ function parsePrompt(prompt: string) {
 }
 
 function scoreQuote(quote: MockQuote) {
-  const signalBonus =
-    quote.signal === "bullish" ? 2 : quote.signal === "neutral" ? 1 : 0;
+  const signalBonus = quote.signal === "bullish" ? 2 : quote.signal === "neutral" ? 1 : 0;
   return signalBonus + (quote.confidence ?? 0);
 }
 
@@ -214,16 +213,16 @@ export function InvestmentChatBubble({
 
   return (
     <section
-      className={`rounded-2xl border border-emerald-200 bg-[linear-gradient(180deg,rgba(236,253,245,0.96),rgba(255,255,255,0.98))] ${
+      className={`rounded-2xl border border-indigo-500/25 bg-[linear-gradient(180deg,rgba(49,46,129,0.24),rgba(15,23,42,0.92))] ${
         expanded ? "p-6" : "p-4"
       }`}
     >
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
-          <h3 className={`${expanded ? "text-lg" : "text-sm"} font-semibold text-zinc-900`}>
+          <h3 className={`${expanded ? "text-lg" : "text-sm"} font-semibold text-white`}>
             TradeWise AI Prompt
           </h3>
-          <p className={`mt-1 ${expanded ? "max-w-2xl text-sm leading-6" : "text-xs"} text-zinc-600`}>
+          <p className={`mt-1 ${expanded ? "max-w-2xl text-sm leading-6" : "text-xs"} text-slate-300`}>
             Describe the kind of stocks you want to practice with and TradeWise will choose up to three symbols, load the basket, and explain the reasoning.
           </p>
         </div>
@@ -231,7 +230,7 @@ export function InvestmentChatBubble({
           <button
             type="button"
             onClick={() => router.push("/trade")}
-            className="rounded-lg border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100"
+            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs font-medium text-slate-200 hover:bg-slate-800"
           >
             Open Trade
           </button>
@@ -239,7 +238,7 @@ export function InvestmentChatBubble({
       </div>
 
       <div
-        className={`space-y-2 overflow-y-auto rounded-2xl border border-zinc-200 bg-white ${
+        className={`space-y-2 overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950/80 ${
           expanded ? "max-h-80 p-4" : "max-h-44 p-3"
         }`}
       >
@@ -248,8 +247,8 @@ export function InvestmentChatBubble({
             key={`${message.role}-${index}`}
             className={`max-w-[92%] rounded-2xl px-3 py-2 ${expanded ? "text-sm leading-6" : "text-sm"} ${
               message.role === "assistant"
-                ? "bg-zinc-100 text-zinc-800"
-                : "ml-auto bg-zinc-900 text-white"
+                ? "bg-slate-800 text-slate-100"
+                : "ml-auto bg-indigo-600 text-white"
             }`}
           >
             {message.text}
@@ -266,7 +265,7 @@ export function InvestmentChatBubble({
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
             placeholder="Example: I want safer healthcare and tech names I can track this week without taking too much risk."
-            className="min-h-28 w-full rounded-2xl border border-zinc-300 bg-white px-4 py-3 text-sm leading-6 outline-none ring-emerald-400 focus:ring-2"
+            className="min-h-28 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm leading-6 text-white outline-none ring-indigo-400 focus:ring-2"
             disabled={loading}
           />
         ) : (
@@ -274,20 +273,20 @@ export function InvestmentChatBubble({
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
             placeholder="Example: I want safe tech + healthcare picks this week"
-            className="flex-1 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none ring-emerald-400 focus:ring-2"
+            className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none ring-indigo-400 focus:ring-2"
             disabled={loading}
           />
         )}
         <div className={expanded ? "flex items-center justify-between gap-3" : ""}>
           {expanded ? (
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-slate-400">
               Replies use Qwen when available and fall back gracefully if the model is unavailable.
             </p>
           ) : null}
           <button
             type="submit"
             disabled={!canSubmit}
-            className={`rounded-xl bg-zinc-900 font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 ${
+            className={`rounded-xl bg-emerald-500 font-semibold text-emerald-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60 ${
               expanded ? "px-5 py-3 text-sm" : "px-4 py-2 text-sm"
             }`}
           >
@@ -296,7 +295,7 @@ export function InvestmentChatBubble({
         </div>
       </form>
 
-      {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+      {error ? <p className="mt-3 text-sm text-rose-400">{error}</p> : null}
     </section>
   );
 }

@@ -8,7 +8,7 @@ type LiveLineChartProps = {
 export function LiveLineChart({ history, ticker }: LiveLineChartProps) {
   if (history.length < 2) {
     return (
-      <div className="rounded-xl border border-dashed border-zinc-300 px-4 py-10 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+      <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-900/70 px-4 py-10 text-center text-sm text-slate-400">
         Not enough history to draw a live chart for {ticker}.
       </div>
     );
@@ -37,21 +37,21 @@ export function LiveLineChart({ history, ticker }: LiveLineChartProps) {
   const up = history[history.length - 1] >= history[0];
 
   return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950">
+    <div className="rounded-3xl border border-slate-800 bg-slate-900/90 p-3 shadow-lg shadow-slate-950/20">
       <div className="mb-2 flex items-center justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+          <p className="text-sm font-semibold text-white">
             Price trend
           </p>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          <p className="text-xs text-slate-500">
             Moves with incoming market updates for {ticker}.
           </p>
         </div>
         <div className="text-right">
-          <p className="text-xs uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
+          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
             Range
           </p>
-          <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+          <p className="text-sm font-semibold text-white">
             ${min.toFixed(2)} - ${max.toFixed(2)}
           </p>
         </div>
@@ -67,21 +67,21 @@ export function LiveLineChart({ history, ticker }: LiveLineChartProps) {
           <linearGradient id="tradewise-line-fill" x1="0" y1="0" x2="0" y2="1">
             <stop
               offset="0%"
-              stopColor={up ? "#0f766e" : "#b91c1c"}
+              stopColor={up ? "#34d399" : "#fb7185"}
               stopOpacity="0.28"
             />
             <stop
               offset="100%"
-              stopColor={up ? "#0f766e" : "#b91c1c"}
+              stopColor={up ? "#34d399" : "#fb7185"}
               stopOpacity="0"
             />
           </linearGradient>
         </defs>
-        <rect width={width} height={height} rx="18" fill="transparent" />
+        <rect width={width} height={height} rx="18" fill="#020617" />
         <path d={`M ${areaPoints}`} fill="url(#tradewise-line-fill)" />
         <polyline
           fill="none"
-          stroke={up ? "#0f766e" : "#b91c1c"}
+          stroke={up ? "#34d399" : "#fb7185"}
           strokeWidth="4"
           strokeLinejoin="round"
           strokeLinecap="round"

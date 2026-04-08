@@ -197,6 +197,30 @@ class AutoTradeBatchResponse(BaseModel):
     results: list[AutoTradeResponse] = Field(default_factory=list)
 
 
+class WatchSessionStartRequest(BaseModel):
+    userId: str = "guest"
+    tickers: list[str] = Field(min_length=1, max_length=3)
+    modelProfile: ModelProfile = "risky"
+    cadence: RefreshCadence = "1m"
+    autoTradeEnabled: bool = False
+
+
+class WatchSessionResponse(BaseModel):
+    userId: str
+    trackedTickers: list[str] = Field(default_factory=list)
+    modelProfile: ModelProfile
+    cadence: RefreshCadence
+    autoTradeEnabled: bool
+    running: bool
+    quotes: list[QuoteResponse] = Field(default_factory=list)
+    lastAutoTrade: AutoTradeResponse | None = None
+    paperTradeLog: list[dict] = Field(default_factory=list)
+    lastError: str | None = None
+    lastRunAt: str | None = None
+    createdAt: str
+    updatedAt: str
+
+
 class PaperAccountPosition(BaseModel):
     ticker: str
     shares: int = Field(ge=0)

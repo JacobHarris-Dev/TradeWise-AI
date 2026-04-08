@@ -60,9 +60,9 @@ function ChartTooltip({
   const p = payload[0]?.payload;
   if (!p) return null;
   return (
-    <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-md">
-      <p className="font-medium text-zinc-900">{p.fullLabel ?? p.label}</p>
-      <p className="text-emerald-600">{formatUsd(p.value)}</p>
+    <div className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm shadow-md">
+      <p className="font-medium text-slate-100">{p.fullLabel ?? p.label}</p>
+      <p className="text-emerald-400">{formatUsd(p.value)}</p>
     </div>
   );
 }
@@ -136,34 +136,34 @@ export function PortfolioGrowthChart({
   const changePrefix = resolvedDayChange >= 0 ? "+" : "-";
 
   return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
+    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-sm">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-sm font-medium text-zinc-500">{title}</p>
-          <p className="mt-1 text-3xl font-semibold tracking-tight text-zinc-900">
+          <p className="text-sm font-medium text-slate-400">{title}</p>
+          <p className="mt-1 text-3xl font-semibold tracking-tight text-white">
             {formatUsd(total)}
           </p>
           <p
             className={`mt-1 text-sm font-medium ${
-              pctChange >= 0 ? "text-emerald-600" : "text-red-600"
+              pctChange >= 0 ? "text-emerald-400" : "text-rose-400"
             }`}
           >
             {changePrefix}
             {formatUsd(Math.abs(resolvedDayChange))} ({changePrefix}
             {Math.abs(pctChange).toFixed(2)}%){" "}
-            <span className="font-normal text-zinc-500">
+            <span className="font-normal text-slate-500">
               {isLiveIntraday ? "today" : "in range"}
             </span>
           </p>
           {isLiveIntraday && updatedAt ? (
-            <p className="mt-1 text-xs text-zinc-500">
+            <p className="mt-1 text-xs text-slate-500">
               Updated {new Date(updatedAt).toLocaleTimeString()}
             </p>
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {hasLiveIntradayData ? (
-            <div className="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">
+            <div className="rounded-lg bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-400">
               {range === "1d" ? "1D live" : "Live data available"}
             </div>
           ) : null}
@@ -175,8 +175,8 @@ export function PortfolioGrowthChart({
                 onClick={() => setRange(key)}
                 className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
                   range === key
-                    ? "bg-emerald-600 text-white shadow-sm"
-                    : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
+                    ? "bg-indigo-600 text-white shadow-sm"
+                    : "bg-slate-800 text-slate-400 hover:bg-slate-700"
                 }`}
               >
                 {label}
@@ -195,10 +195,10 @@ export function PortfolioGrowthChart({
                 <stop offset="100%" stopColor="#059669" stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" vertical={false} />
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
             <XAxis
               dataKey="label"
-              tick={{ fontSize: 11, fill: "#71717a" }}
+              tick={{ fontSize: 11, fill: "#64748b" }}
               axisLine={false}
               tickLine={false}
               interval="preserveStartEnd"
@@ -212,7 +212,7 @@ export function PortfolioGrowthChart({
                     ? `$${(v / 1000).toFixed(1)}k`
                     : `$${v}`
               }
-              tick={{ fontSize: 11, fill: "#71717a" }}
+              tick={{ fontSize: 11, fill: "#64748b" }}
               axisLine={false}
               tickLine={false}
               width={56}

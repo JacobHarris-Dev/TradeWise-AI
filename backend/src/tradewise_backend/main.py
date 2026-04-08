@@ -10,6 +10,7 @@ from .news_reasoning import build_investment_chat_reply, build_student_news_reas
 from .paper_account import get_paper_account, grant_paper_position
 from .paper_portfolio import build_paper_account_performance
 from .paper_trading import execute_auto_trade, execute_auto_trade_batch
+from .watch_sessions import get_watch_session, snapshot_watch_session, start_watch_session, stop_watch_session
 from .schemas import (
     AnalyzeRequest,
     AutoTradeBatchRequest,
@@ -29,6 +30,8 @@ from .schemas import (
     QuoteResponse,
     StockRecommendationResponse,
     StockRecommendationsResponse,
+    WatchSessionResponse,
+    WatchSessionStartRequest,
 )
 from .stock_universe import recommend_stocks_for_sectors
 
@@ -70,6 +73,7 @@ def get_quotes(
     include_chart: bool = Query(False, alias="includeChart"),
     model_profile: str | None = Query(None, alias="modelProfile"),
     chart_type: str | None = Query(None, alias="chartType"),
+    provider: str | None = Query(None, alias="provider"),
 ) -> QuoteBatchResponse:
     try:
         return build_quote_responses(
@@ -77,6 +81,7 @@ def get_quotes(
             include_chart=include_chart,
             model_profile=model_profile,
             chart_type=chart_type,
+            provider=provider,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -283,6 +288,32 @@ def auto_trade_batch(payload: AutoTradeBatchRequest) -> AutoTradeBatchResponse:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/v1/watch/start", response_model=WatchSessionResponse)
+async def start_watch(payload: WatchSessionStartRequest) -> WatchSessionResponse:
+    session = start_watch_session(
+        user_id=payload.userId,
+        tickers=payload.tickers,
+        model_profile=payload.modelProfile,
+        cadence=payload.cadence,
+        auto_trade_enabled=payload.autoTradeEnabled,
+    )
+    return WatchSessionResponse(**snapshot_watch_session(session))
+
+
+@app.get("/v1/watch", response_model=WatchSessionResponse)
+def read_watch(user_id: str = Query("guest", alias="userId")) -> WatchSessionResponse:
+    session = get_watch_session(user_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="No active watch session.")
+    return WatchSessionResponse(**snapshot_watch_session(session))
+
+
+@app.delete("/v1/watch", response_model=dict[str, str])
+async def delete_watch(user_id: str = Query("guest", alias="userId")) -> dict[str, str]:
+    stop_watch_session(user_id)
+    return {"status": "stopped"}
 
 
 @app.get("/v1/paper-account", response_model=PaperAccountResponse)

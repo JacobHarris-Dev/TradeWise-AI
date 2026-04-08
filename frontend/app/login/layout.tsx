@@ -10,6 +10,6 @@ export default function LoginLayout({
   children,
 }: Readonly<{ children: ReactNode }>) {
   return (
-    <div className="min-h-full bg-[#f4f5f7]">{children}</div>
+    <div className="min-h-full bg-slate-950">{children}</div>
   );
 }

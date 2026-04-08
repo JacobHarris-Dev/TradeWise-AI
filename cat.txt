@@ -1,0 +1,121 @@
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        return list(executor.map(build_price_snapshot, tickers))
+
+
+def build_quote_response(
+    raw_ticker: str,
+    include_chart: bool = False,
+    model_profile: str | None = None,
+    chart_type: str | None = None,
+    news_context_override: object = _MISSING_NEWS_CONTEXT,
+) -> QuoteResponse:
+    ticker = validate_ticker(normalize_ticker(raw_ticker))
+    selected_model_profile = normalize_model_profile(model_profile)
+    selected_chart_type = normalize_chart_type(chart_type)
+    profile = _price_profile(ticker)
+    history = get_close_history(ticker, length=HISTORY_LENGTH)
+    latest_features = build_latest_features(history, annual_rate=DEFAULT_ANNUAL_RATE)
+
+    technicals = TechnicalSnapshot(**asdict(latest_features))
+    bundle = load_model_bundle(profile=selected_model_profile)
+    model_prediction = predict_signal(bundle, latest_features)
+    news_context = (
+        build_news_context(ticker)
+        if news_context_override is _MISSING_NEWS_CONTEXT
+        else cast("NewsContext | None", news_context_override)
+    )
+
+    last_price = float(history.iloc[-1])
+    previous_price = float(history.iloc[-2])
+    short_ma = technicals.shortMovingAverage
+    long_ma = technicals.longMovingAverage
+    momentum = float(history.iloc[-1] / history.iloc[-8] - 1.0)
+    volatility = float(history.pct_change().dropna().std())
+    change_percent = round((last_price / previous_price - 1.0) * 100.0, 2)
+
+    if model_prediction is not None:
+        signal = model_prediction.signal
+        confidence = model_prediction.confidence
+        model_version = model_prediction.model_version
+        trend_direction = "up" if short_ma >= long_ma else "down"
+        explanation = (
+            f"This looks {signal} right now ({confidence:.1f}% confidence). "
+            f"Short trend is {trend_direction}. "
+            f"7-day move: {momentum * 100:.1f}%. "
+            f"Volatility: {volatility * 100:.1f}%."
+        )
+    else:
+        score = _signal_score(short_ma, long_ma, momentum, volatility)
+        signal = _signal_from_score(score)
+        confidence = round(min(99.0, max(50.0, 55.0 + abs(score) * 45.0)), 1)
+        model_version = MODEL_VERSION
+        trend_direction = "up" if short_ma >= long_ma else "down"
+        explanation = (
+            f"This looks {signal} right now ({confidence:.1f}% confidence). "
+            f"Short trend is {trend_direction}. "
+            f"7-day move: {momentum * 100:.1f}%. "
+            f"Volatility: {volatility * 100:.1f}%."
+        )
+
+    explanation += _build_news_supporting_sentence(
+        signal,
+        news_context.summary if news_context else None,
+        news_context.sentiment if news_context else None,
+        news_context.topics if news_context else (),
+    )
+
+    return QuoteResponse(
+        ticker=ticker,
+        companyName=profile.company_name,
+        lastPrice=round(last_price, 2),
+        changePercent=change_percent,
+        signal=signal,
+        confidence=confidence,
+        explanation=explanation,
+        modelVersion=model_version,
+        selectedModelProfile=selected_model_profile,
+        selectedChartType=selected_chart_type,
+        history=[round(value, 2) for value in history.tolist()],
+        technicals=technicals,
+        chartDataUri=(
+            _build_candlestick_chart_data_uri(
+                get_ohlc_history(ticker, length=HISTORY_LENGTH),
+                ticker,
+            )
+            if include_chart and selected_chart_type == "candlestick"
+            else _build_chart_data_uri(history, ticker)
+            if include_chart
+            else None
+        ),
+        newsSummary=news_context.summary if news_context else None,
+        newsSentiment=(
+            cast(NewsSentiment, news_context.sentiment) if news_context else None
+        ),
+        newsTopics=list(news_context.topics) if news_context else [],
+        newsHeadlines=list(news_context.headlines) if news_context else [],
+    )
+
+
+def build_quote_responses(
+    raw_tickers: list[str],
+    include_chart: bool = False,
+    model_profile: str | None = None,
+    chart_type: str | None = None,
+) -> QuoteBatchResponse:
+    tickers = normalize_ticker_batch(raw_tickers)
+    normalize_model_profile(model_profile)
+    normalize_chart_type(chart_type)
+
+    max_workers = 1 if include_chart else min(8, len(tickers))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(
+                build_quote_response,
+                ticker,
+                include_chart=include_chart,
+                model_profile=model_profile,
+                chart_type=chart_type,
+            )
+            for ticker in tickers
+        ]
+

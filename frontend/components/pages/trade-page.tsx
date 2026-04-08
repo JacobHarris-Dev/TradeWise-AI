@@ -2,24 +2,23 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { startTransition, useEffect, useState } from "react";
-import { InvestmentChatBubble } from "@/components/dashboard/investment-chat-bubble";
+import { startTransition, useEffect, useMemo, useState } from "react";
 import { TradeStarterSectors } from "@/components/dashboard/trade-starter-sectors";
 import { AiDisclaimer } from "@/components/layout/ai-disclaimer";
 import { useTradeWorkspace } from "@/components/providers/trade-workspace-provider";
 import { LiveLineChart } from "@/components/stock/live-line-chart";
 import { StockCard } from "@/components/stock/stock-card";
-import { TradeMarketNews } from "@/components/trade/trade-market-news";
+import { TradeTickerNewsReport } from "@/components/trade/trade-market-news";
 import type { ModelProfile, RefreshCadence } from "@/lib/mocks/stock-data";
 import { MAX_TRACKED_TICKERS, type TradeMode } from "@/lib/trade-workspace";
 
 const SIGNAL_BADGES = {
   bullish:
-    "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300",
+    "bg-emerald-500/15 text-emerald-300 ring-1 ring-inset ring-emerald-500/30",
   bearish:
-    "bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-300",
+    "bg-rose-500/15 text-rose-300 ring-1 ring-inset ring-rose-500/30",
   neutral:
-    "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200",
+    "bg-slate-800/90 text-slate-300 ring-1 ring-inset ring-slate-700",
 } as const;
 
 const SIGNAL_LABELS = {
@@ -29,9 +28,9 @@ const SIGNAL_LABELS = {
 } as const;
 
 const ACTION_BADGES = {
-  buy: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300",
-  sell: "bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-300",
-  hold: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200",
+  buy: "bg-emerald-500/15 text-emerald-300 ring-1 ring-inset ring-emerald-500/30",
+  sell: "bg-rose-500/15 text-rose-300 ring-1 ring-inset ring-rose-500/30",
+  hold: "bg-slate-800/90 text-slate-300 ring-1 ring-inset ring-slate-700",
 } as const;
 
 const ACTION_LABELS = {
@@ -75,7 +74,6 @@ export function TradePage() {
     trackedTickers,
     selectedTicker,
     quotesByTicker,
-    loading,
     error,
     lastAction,
     tradeMode,
@@ -107,7 +105,6 @@ export function TradePage() {
     setModelProfile,
     setRefreshCadence,
     setAutoTradeEnabled,
-    checkSelectedStocks,
     selectTrackedTicker,
     removeTrackedTicker,
     loadNewsReport,
@@ -145,18 +142,12 @@ export function TradePage() {
   const trackedTickerSummary = trackedTickers.length
     ? trackedTickers.join(", ")
     : currentSymbol;
-  const visibleNewsHeadlines =
-    newsReport?.newsHeadlines?.length
-      ? newsReport.newsHeadlines
-      : quote?.newsHeadlines ?? [];
   const streamStatusDescription =
-    tradeMode !== "model"
+    !marketSnapshot.isOpen
       ? null
-      : !marketSnapshot.isOpen
-        ? "Live stream paused until market open"
-        : streamConnected
-          ? "Live stream connected"
-          : "Connecting to IEX stream";
+      : streamConnected
+        ? "Live stream connected"
+        : "Connecting to IEX stream";
   const marketStatusLine = streamStatusDescription
     ? `${marketSnapshot.statusLabel} | ${streamStatusDescription}`
     : marketSnapshot.statusLabel;
@@ -165,43 +156,51 @@ export function TradePage() {
     : streamConnected
       ? "Connected"
       : "Connecting";
-  const selectedSimPrice =
-    selectedTicker && simulationSnapshot?.currentPrices[selectedTicker] != null
-      ? simulationSnapshot.currentPrices[selectedTicker]
-      : null;
+  const paperTradeStats = useMemo(() => {
+    return paperTradeLog.reduce(
+      (acc, entry) => {
+        acc.total += 1;
+        if (entry.action === "buy") acc.buys += 1;
+        if (entry.action === "sell") acc.sells += 1;
+        if (entry.action === "hold") acc.holds += 1;
+        return acc;
+      },
+      { total: 0, buys: 0, sells: 0, holds: 0 },
+    );
+  }, [paperTradeLog]);
 
   return (
-    <div className="flex max-w-6xl flex-col gap-4">
-      <section className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+    <div className="flex max-w-6xl flex-col gap-4 text-slate-100">
+      <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-5 shadow-lg shadow-slate-950/20">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
+          <h1 className="text-2xl font-semibold text-white">
             Trade
           </h1>
-          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+          <p className="mt-1 text-sm text-slate-400">
             Track up to three stocks on one live stream with paper trading controls.
           </p>
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
-          <span className="rounded-full border border-zinc-200 px-3 py-1 dark:border-zinc-800">
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+          <span className="rounded-full border border-slate-700 bg-slate-950/70 px-3 py-1 text-slate-300">
             {currentTime}
           </span>
-          <p className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
+          <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
             {marketStatusLine}
-            {tradeMode === "model" ? ` | IEX: ${liveFeedLabel}` : null}
+            {marketSnapshot.isOpen ? ` | IEX: ${liveFeedLabel}` : null}
           </p>
         </div>
 
         <section className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <label className="flex flex-col gap-1">
-            <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400">
+            <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
               Experience view
               <InfoHint label="Simple keeps this page beginner-friendly. Advanced shows all detailed metrics and logs." />
             </span>
             <select
               value={uiMode}
               onChange={(e) => setUiMode(e.target.value as TradeUiMode)}
-              className="rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none transition focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+              className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none transition focus:border-indigo-500"
             >
               <option value="simple">Simple</option>
               <option value="advanced">Advanced</option>
@@ -209,14 +208,14 @@ export function TradePage() {
           </label>
 
           <label className="flex flex-col gap-1">
-            <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400">
+            <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
               How you want to practice
               <InfoHint label="Choose whether you want to make the paper decisions yourself or let TradeWise handle the paper trades for you." />
             </span>
             <select
               value={tradeMode}
               onChange={(e) => setTradeMode(e.target.value as TradeMode)}
-              className="rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none transition focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+              className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none transition focus:border-indigo-500"
             >
               <option value="manual">{TRADE_MODE_LABELS.manual}</option>
               <option value="model">{TRADE_MODE_LABELS.model}</option>
@@ -224,14 +223,14 @@ export function TradePage() {
           </label>
 
           <label className="flex flex-col gap-1">
-            <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400">
+            <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
               Risk style
               <InfoHint label="Safe reacts more carefully, Neutral stays balanced, and Risky responds more aggressively to market moves." />
             </span>
             <select
               value={modelProfile}
               onChange={(e) => setModelProfile(e.target.value as ModelProfile)}
-              className="rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none transition focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+              className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none transition focus:border-indigo-500"
             >
               <option value="safe">Safe</option>
               <option value="neutral">Neutral</option>
@@ -240,14 +239,14 @@ export function TradePage() {
           </label>
 
           <label className="flex flex-col gap-1">
-            <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400">
+            <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
               Check-ins
               <InfoHint label="This is how often TradeWise checks the model and, if enabled, decides whether to place a paper trade." />
             </span>
             <select
               value={refreshCadence}
               onChange={(e) => setRefreshCadence(e.target.value as RefreshCadence)}
-              className="rounded-xl border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 outline-none transition focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+              className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none transition focus:border-indigo-500"
             >
               <option value="1m">1 minute</option>
               <option value="5m">5 minutes</option>
@@ -257,105 +256,157 @@ export function TradePage() {
         </section>
       </section>
 
-      <section
-        id="trade-setup"
-        className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_24rem]"
-      >
-        <div className="flex flex-col gap-4">
-          <InvestmentChatBubble expanded showOpenTradeButton={false} />
-          <TradeMarketNews />
-        </div>
-        <div>
-          <TradeStarterSectors />
-        </div>
+      <section id="trade-setup" className="w-full">
+        <TradeStarterSectors />
       </section>
 
-      <section className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+      <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-5 shadow-lg shadow-slate-950/20">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400">
-              Trade basket
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Trade activity
             </p>
-            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-              This page works from the tracked symbols below. Load a starter basket from the sectors panel or let the AI prompt choose the symbols for you.
+            <p className="mt-1 text-sm text-slate-400">
+              This log shows the latest paper buys, sells, and holds TradeWise has made.
             </p>
-            {!trackedTickers.length ? (
-              <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-                No tracked symbols loaded. <Link href="#trade-setup" className="font-semibold text-zinc-900 underline underline-offset-4 dark:text-zinc-100">Use the setup panel above</Link> to preload a basket.
+            {!paperTradeLog.length ? (
+              <p className="mt-2 text-sm text-slate-400">
+                No paper trades yet. Turn on paper trading or run a check to start the log.
               </p>
             ) : null}
           </div>
-
-          <div className="flex flex-wrap gap-2">
-            {tradeMode === "model" ? (
-              <button
-                type="button"
-                onClick={() => void loadMockTradingDay()}
-                disabled={mockTradingLoading || !selectedTicker}
-                className="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 text-sm font-medium text-zinc-900 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
-              >
-                {mockTradingLoading ? "Loading..." : "Replay a practice day"}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => void checkSelectedStocks()}
-              disabled={loading || !trackedTickers.length}
-              className="rounded-xl bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
-            >
-              {loading ? "Checking..." : "Check selected stocks"}
-            </button>
+          <div className="flex flex-wrap gap-2 text-xs text-slate-400">
+            <span className="rounded-full border border-slate-700 bg-slate-950/70 px-3 py-1 text-slate-300">
+              {paperTradeStats.total} entries
+            </span>
+            <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-emerald-300">
+              {paperTradeStats.buys} buys
+            </span>
+            <span className="rounded-full border border-rose-500/20 bg-rose-500/10 px-3 py-1 text-rose-300">
+              {paperTradeStats.sells} sells
+            </span>
+            <span className="rounded-full border border-slate-700 bg-slate-950/70 px-3 py-1 text-slate-300">
+              {paperTradeStats.holds} holds
+            </span>
           </div>
         </div>
 
-        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+        <div className="mt-4 flex flex-wrap gap-2">
+          {tradeMode === "model" ? (
+            <button
+              type="button"
+              onClick={() => void loadMockTradingDay()}
+              disabled={mockTradingLoading || !selectedTicker}
+              className="rounded-xl border border-slate-700 bg-slate-950 px-4 py-2.5 text-sm font-medium text-slate-100 transition hover:border-slate-600 hover:bg-slate-800 disabled:opacity-60"
+            >
+              {mockTradingLoading ? "Loading..." : "Replay a practice day"}
+            </button>
+          ) : null}
+        </div>
+
+        {paperTradeLog.length ? (
+          <div className="mt-4 max-h-72 overflow-auto rounded-2xl border border-slate-800 bg-slate-950/70">
+            <ul className="divide-y divide-slate-800/70">
+              {paperTradeLog.map((entry) => (
+                <li key={entry.id} className="px-4 py-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                      {new Date(entry.timestamp).toLocaleTimeString()}
+                    </span>
+                    <span className="font-mono text-sm font-semibold text-white">
+                      {entry.ticker}
+                    </span>
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
+                        ACTION_BADGES[entry.action]
+                      }`}
+                    >
+                      {ACTION_LABELS[entry.action]}
+                    </span>
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
+                        SIGNAL_BADGES[entry.signal]
+                      }`}
+                    >
+                      {SIGNAL_LABELS[entry.signal]}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm text-slate-300">
+                    {entry.submitted
+                      ? entry.statusMessage
+                      : `No paper trade placed. ${entry.statusMessage}`}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Risk style: {MODEL_PROFILE_LABELS[entry.modelProfile]} | Confidence:{" "}
+                    {entry.confidence.toFixed(1)}%
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-5 shadow-lg shadow-slate-950/20">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Live tracking
+            </p>
+            <p className="mt-1 text-sm text-slate-400">
+              This page refreshes the tracked symbols automatically while the market is open.
+            </p>
+          </div>
+        </div>
+
+        <p className="mt-2 text-xs text-slate-500">
           {isAdvancedView
             ? `Mode: ${TRADE_MODE_LABELS[tradeMode]}. Risk style: ${MODEL_PROFILE_LABELS[modelProfile]}. Check-ins: ${CADENCE_LABELS[refreshCadence]}. Tracking ${trackedTickers.length}/${MAX_TRACKED_TICKERS} symbols.`
             : "Simple view is on: showing beginner-friendly guidance with less data clutter."}
         </p>
         {error ? (
-          <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>
+          <p className="mt-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">{error}</p>
         ) : null}
         {mockTradingError ? (
-          <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+          <p className="mt-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {mockTradingError}
           </p>
         ) : null}
         {autoTradeError ? (
-          <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+          <p className="mt-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {autoTradeError}
           </p>
         ) : null}
         {paperAccountError ? (
-          <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+          <p className="mt-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {paperAccountError}
           </p>
         ) : null}
         {streamError ? (
-          <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+          <p className="mt-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {streamError}
           </p>
         ) : null}
         {newsReportError ? (
-          <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+          <p className="mt-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {newsReportError}
           </p>
         ) : null}
       </section>
 
       {trackedTickers.length ? (
-        <section className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+        <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-5 shadow-lg shadow-slate-950/20">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              <h2 className="text-sm font-semibold text-white">
                 Tracked symbols
               </h2>
-              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+              <p className="mt-1 text-sm text-slate-400">
                 One shared stream updates every symbol below. Select a card to focus the detail view.
               </p>
             </div>
             {isAdvancedView ? (
-              <p className="text-xs uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
+              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
                 {trackedTickers.length}/{MAX_TRACKED_TICKERS} slots used
               </p>
             ) : null}
@@ -370,8 +421,8 @@ export function TradePage() {
                   key={ticker}
                   className={`rounded-2xl border p-3 transition ${
                     isSelected
-                      ? "border-zinc-900 bg-zinc-50 dark:border-zinc-100 dark:bg-zinc-900/70"
-                      : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950"
+                      ? "border-indigo-500/60 bg-indigo-500/10 shadow-[0_0_0_1px_rgba(99,102,241,0.12)]"
+                      : "border-slate-800 bg-slate-950/70"
                   }`}
                 >
                   <button
@@ -395,21 +446,21 @@ export function TradePage() {
                             : ""}
                         </span>
                       ) : (
-                        <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                        <span className="text-xs text-slate-500">
                           Loading quote...
                         </span>
                       )}
                     </div>
                     <div className="flex items-center gap-2">
                       {isSelected ? (
-                        <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-indigo-300">
                           Selected
                         </span>
                       ) : null}
                       <button
                         type="button"
                         onClick={() => removeTrackedTicker(ticker)}
-                        className="rounded-lg border border-zinc-300 bg-white px-2.5 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                        className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs font-semibold text-slate-300 transition hover:border-slate-600 hover:bg-slate-800"
                       >
                         Remove
                       </button>
@@ -428,11 +479,11 @@ export function TradePage() {
             <StockCard quote={quote} />
 
             {tradeMode === "manual" ? (
-              <section className="rounded-2xl border border-zinc-200 bg-zinc-50/80 p-4 dark:border-zinc-800 dark:bg-zinc-900/60">
-                <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-4 shadow-lg shadow-slate-950/20">
+                <h2 className="text-sm font-semibold text-white">
                   Self-directed practice
                 </h2>
-                <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+                <p className="mt-2 text-sm leading-6 text-slate-400">
                   Use this mode if you want to compare your own call with the model before
                   risking real money.
                 </p>
@@ -461,21 +512,21 @@ export function TradePage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => simulateOrder("sell", manualShares)}
-                    className="flex-1 rounded-xl border border-red-300 bg-white py-2.5 text-sm font-semibold text-red-700 hover:bg-red-50 dark:border-red-800 dark:bg-zinc-900 dark:text-red-400 dark:hover:bg-red-950/40"
+                    onClick={() => simulateOrder("sell")}
+                    className="flex-1 rounded-xl border border-rose-500/30 bg-rose-500/10 py-2.5 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/15"
                   >
                     Practice sell
                   </button>
                 </div>
               </section>
             ) : (
-              <section className="rounded-2xl border border-zinc-200 bg-zinc-50/80 p-4 dark:border-zinc-800 dark:bg-zinc-900/60">
+              <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-4 shadow-lg shadow-slate-950/20">
                 <div className="flex items-start gap-3">
                   <div>
-                    <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                    <h2 className="text-sm font-semibold text-white">
                       TradeWise-guided practice
                     </h2>
-                    <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                    <p className="mt-1 text-sm text-slate-400">
                       TradeWise can watch {trackedTickerSummary} for you and make
                       paper-only decisions while this page stays open.
                     </p>
@@ -484,38 +535,38 @@ export function TradePage() {
                 {isAdvancedView ? (
                   <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
                     <div>
-                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500">
                         Risk style
                         <InfoHint label="This is the personality of the model you picked: cautious, balanced, or aggressive." />
                       </dt>
-                      <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                      <dd className="mt-1 font-semibold text-white">
                         {MODEL_PROFILE_LABELS[modelProfile]}
                       </dd>
                     </div>
                     <div>
-                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500">
                         Check-ins
                         <InfoHint label="How often TradeWise pauses to reevaluate the stock and decide whether to paper buy, paper sell, or wait." />
                       </dt>
-                      <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                      <dd className="mt-1 font-semibold text-white">
                         {CADENCE_LABELS[refreshCadence]}
                       </dd>
                     </div>
                     <div>
-                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500">
                         When it runs
                         <InfoHint label="The automatic checks happen while the market is open and this page is open in your browser." />
                       </dt>
-                      <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                      <dd className="mt-1 font-semibold text-white">
                         Market hours
                       </dd>
                     </div>
                     <div>
-                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500">
                         Live price feed
                         <InfoHint label="This feed keeps the price moving so the chart and price card stay current between model check-ins." />
                       </dt>
-                      <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                      <dd className="mt-1 font-semibold text-white">
                         {!marketSnapshot.isOpen
                           ? "Paused until market open"
                           : streamConnected
@@ -524,11 +575,11 @@ export function TradePage() {
                       </dd>
                     </div>
                     <div>
-                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500">
                         What it is doing
                         <InfoHint label="This tells you whether TradeWise is actively checking the model right now or waiting for the next market session." />
                       </dt>
-                      <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                      <dd className="mt-1 font-semibold text-white">
                         {marketSnapshot.isOpen
                           ? `Checking every ${CADENCE_LABELS[refreshCadence]}`
                           : "Waiting for the next session"}
@@ -536,7 +587,7 @@ export function TradePage() {
                     </div>
                   </dl>
                 ) : null}
-                <p className="mt-4 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+                <p className="mt-4 text-sm leading-6 text-slate-400">
                   {marketSnapshot.isOpen
                     ? autoTradeEnabled
                       ? `Paper trading is on. TradeWise will keep checking ${trackedTickerSummary} every ${CADENCE_LABELS[refreshCadence]}.`
@@ -544,11 +595,11 @@ export function TradePage() {
                     : "The market is closed right now, so live prices and paper trades stay paused until the next trading session."}
                 </p>
                 {isAdvancedView ? (
-                  <div className="mt-3 rounded-xl border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-950">
-                    <p className="text-xs uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
+                  <div className="mt-3 rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2">
+                    <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
                       Paper account snapshot
                     </p>
-                    <p className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                    <p className="mt-1 text-sm font-semibold text-white">
                       {paperAccountLoading && !paperAccount
                         ? "Loading account..."
                         : paperAccount
@@ -565,8 +616,8 @@ export function TradePage() {
                     onClick={() => setAutoTradeEnabled((current) => !current)}
                     className={`rounded-xl px-4 py-2 text-sm font-semibold ${
                       autoTradeEnabled
-                        ? "bg-red-600 text-white hover:bg-red-500"
-                        : "bg-emerald-600 text-white hover:bg-emerald-500"
+                        ? "bg-rose-500 text-white hover:bg-rose-400"
+                        : "bg-emerald-500 text-slate-950 hover:bg-emerald-400"
                     }`}
                   >
                     {autoTradeEnabled ? "Pause paper trading" : "Start paper trading"}
@@ -575,13 +626,13 @@ export function TradePage() {
                     type="button"
                     onClick={() => void runAutoTrade()}
                     disabled={autoTradeLoading}
-                    className="rounded-xl border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-900 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+                    className="rounded-xl border border-slate-700 bg-slate-950 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-slate-600 hover:bg-slate-800 disabled:opacity-60"
                   >
                     {autoTradeLoading ? "Checking..." : "Check once now"}
                   </button>
                 </div>
                 {autoTradeResult ? (
-                  <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">
+                  <p className="mt-3 text-sm text-slate-400">
                     Most recent paper move: {ACTION_LABELS[autoTradeResult.action]}.{" "}
                     {autoTradeResult.statusMessage}
                   </p>
@@ -592,13 +643,13 @@ export function TradePage() {
 
           <div className="flex flex-col gap-4">
             {quote.signal ? (
-              <section className="rounded-2xl border border-zinc-200 bg-zinc-50/80 p-4 dark:border-zinc-800 dark:bg-zinc-900/60">
+              <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-4 shadow-lg shadow-slate-950/20">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                    <h2 className="text-sm font-semibold text-white">
                       What TradeWise suggests right now
                     </h2>
-                    <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                    <p className="mt-1 text-sm text-slate-400">
                       A quick read for {quote.ticker} based on the latest data this page has
                       seen.
                     </p>
@@ -615,111 +666,73 @@ export function TradePage() {
                 {isAdvancedView ? (
                   <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
                     <div>
-                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500">
                         How sure it is
                         <InfoHint label="This is the model's confidence level. Higher means it sees a clearer pattern, not that the outcome is guaranteed." />
                       </dt>
-                      <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                      <dd className="mt-1 font-semibold text-white">
                         {quote.confidence?.toFixed(1) ?? "-"}%
                       </dd>
                     </div>
                     <div>
-                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500">
                         Risk style
                         <InfoHint label="This is the version of TradeWise you picked at the top of the page." />
                       </dt>
-                      <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                      <dd className="mt-1 font-semibold text-white">
                         {MODEL_PROFILE_LABELS[activeProfile]}
                       </dd>
                     </div>
                     <div>
-                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500">
                         Latest price
                         <InfoHint label="The most recent price the page has for this stock." />
                       </dt>
-                      <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                      <dd className="mt-1 font-semibold text-white">
                         ${quote.lastPrice.toFixed(2)}
                       </dd>
                     </div>
                     <div>
-                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500">
                         Today&apos;s move
                         <InfoHint label="This shows how much the price has moved in percentage terms over the latest visible window." />
                       </dt>
-                      <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                      <dd className="mt-1 font-semibold text-white">
                         {quote.changePercent >= 0 ? "+" : ""}
                         {quote.changePercent.toFixed(2)}%
                       </dd>
                     </div>
                     <div>
-                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500">
                         Live update
                         <InfoHint label="This is the time of the last live price update from the streaming feed." />
                       </dt>
-                      <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                      <dd className="mt-1 font-semibold text-white">
                         {lastTickAt ? new Date(lastTickAt).toLocaleTimeString() : "-"}
                       </dd>
                     </div>
                   </dl>
                 ) : (
-                  <p className="mt-3 text-sm leading-6 text-zinc-700 dark:text-zinc-300">
+                  <p className="mt-3 text-sm leading-6 text-slate-300">
                     Quick take: TradeWise currently leans {SIGNAL_LABELS[quote.signal].toLowerCase()} on {quote.ticker}. Switch to Advanced view for confidence and timing metrics.
                   </p>
                 )}
 
-                {tradeMode === "model" ? (
-                  <div className="mt-4 rounded-2xl border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400">
-                        Live news report
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => void loadNewsReport({ forceRefresh: true, showLoading: true })}
-                        className="rounded-lg border border-zinc-300 bg-white px-2.5 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
-                        disabled={newsReportLoading}
-                      >
-                        {newsReportLoading ? "Refreshing..." : "Refresh now"}
-                      </button>
-                    </div>
-                    <div className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50/80 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/60">
-                      <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                        {SIGNAL_LABELS[newsReport?.signal ?? quote.signal]} •{" "}
-                        {(newsReport?.confidence ?? quote.confidence ?? 0).toFixed(1)}%
-                        {" "}confidence
-                      </p>
-                    </div>
-                    <p className="mt-3 text-sm leading-6 text-zinc-700 dark:text-zinc-300">
-                      {newsReport?.studentReasoning ?? newsReport?.report ?? "No news report yet."}
-                    </p>
-                    {visibleNewsHeadlines.length ? (
-                      <div className="mt-3 space-y-2 text-sm leading-6 text-zinc-700 dark:text-zinc-300">
-                        {visibleNewsHeadlines.map((headline) => (
-                          <p key={headline}>{headline}</p>
-                        ))}
-                      </div>
-                    ) : null}
-                    {isAdvancedView ? (
-                      <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                        Updates every {CADENCE_LABELS[refreshCadence]} | Last refresh:{" "}
-                        {newsReport ? new Date(newsReport.refreshedAt).toLocaleTimeString() : "-"} | Source:{" "}
-                        {newsReport?.fromCache ? "cache" : "fresh"}
-                        {newsReport?.reasoningSource ? ` | Reasoning: ${newsReport.reasoningSource}` : ""}
-                      </p>
-                    ) : (
-                      <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                        News summary refreshed in the background.
-                      </p>
-                    )}
-                  </div>
-                ) : null}
+                <TradeTickerNewsReport
+                  quote={quote}
+                  newsReport={newsReport}
+                  newsReportLoading={newsReportLoading}
+                  onRefresh={() => void loadNewsReport({ forceRefresh: true, showLoading: true })}
+                  isAdvancedView={isAdvancedView}
+                  refreshCadence={refreshCadence}
+                />
               </section>
             ) : null}
 
             {quote.history?.length ? (
               <LiveLineChart history={quote.history} ticker={quote.ticker} />
             ) : quote.chartDataUri ? (
-              <section className="rounded-2xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950">
+              <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-3 shadow-lg shadow-slate-950/20">
                 <Image
                   src={quote.chartDataUri}
                   alt={`${quote.ticker} synthetic price chart`}
@@ -819,16 +832,16 @@ export function TradePage() {
           </div>
         </section>
       ) : (
-        <section className="rounded-2xl border border-dashed border-zinc-300 bg-white/70 px-4 py-6 dark:border-zinc-700 dark:bg-zinc-950/40">
-          <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+        <section className="rounded-3xl border border-dashed border-slate-700 bg-slate-900/70 px-4 py-6 shadow-lg shadow-slate-950/20">
+          <h2 className="text-sm font-semibold text-white">
             Load a trade basket first
           </h2>
-          <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            Use the starter sectors or the AI prompt above to load up to three stocks, then review the basket, replay a practice day, or let TradeWise paper trade it for you.
+          <p className="mt-2 text-sm leading-6 text-slate-400">
+            Use the starter sectors to load up to three stocks, then review the basket, replay a practice day, or let TradeWise paper trade it for you.
           </p>
           <Link
             href="#trade-setup"
-            className="mt-3 inline-flex rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+            className="mt-3 inline-flex rounded-xl bg-indigo-500 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-indigo-400"
           >
             Open setup tools
           </Link>
@@ -836,88 +849,88 @@ export function TradePage() {
       )}
 
       {lastAction ? (
-        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-200">
+        <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
           {lastAction}
         </p>
       ) : null}
 
       {mockTradingDay && isAdvancedView ? (
-        <section className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+        <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-5 shadow-lg shadow-slate-950/20">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
             <div>
-              <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              <h2 className="text-sm font-semibold text-white">
                 Practice replay
               </h2>
-              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+              <p className="mt-1 text-sm text-slate-400">
                 A dress rehearsal using recent market history so you can see how the model
                 would have behaved before trying a live paper-trading day.
               </p>
             </div>
-            <div className="text-xs text-zinc-500 dark:text-zinc-400">
+            <div className="text-xs text-slate-500">
               {mockTradingDay.sessionLabel}
             </div>
           </div>
 
           <dl className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-            <div className="rounded-xl border border-zinc-200 bg-zinc-50/80 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/60">
-              <dt className="text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2">
+              <dt className="text-[11px] uppercase tracking-wide text-slate-500">
                 Model build
               </dt>
-              <dd className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              <dd className="mt-1 text-sm font-semibold text-white">
                 {mockTradingDay.modelVersion}
               </dd>
             </div>
-            <div className="rounded-xl border border-zinc-200 bg-zinc-50/80 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/60">
-              <dt className="text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2">
+              <dt className="text-[11px] uppercase tracking-wide text-slate-500">
                 Risk style
               </dt>
-              <dd className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              <dd className="mt-1 text-sm font-semibold text-white">
                 {MODEL_PROFILE_LABELS[mockTradingDay.modelProfile]}
               </dd>
             </div>
-            <div className="rounded-xl border border-zinc-200 bg-zinc-50/80 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/60">
-              <dt className="text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2">
+              <dt className="text-[11px] uppercase tracking-wide text-slate-500">
                 Starting cash
               </dt>
-              <dd className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              <dd className="mt-1 text-sm font-semibold text-white">
                 ${mockTradingDay.summary.startingCash.toFixed(2)}
               </dd>
             </div>
-            <div className="rounded-xl border border-zinc-200 bg-zinc-50/80 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/60">
-              <dt className="text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2">
+              <dt className="text-[11px] uppercase tracking-wide text-slate-500">
                 Ending value
               </dt>
-              <dd className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              <dd className="mt-1 text-sm font-semibold text-white">
                 ${mockTradingDay.summary.endingEquity.toFixed(2)}
               </dd>
             </div>
-            <div className="rounded-xl border border-zinc-200 bg-zinc-50/80 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/60">
-              <dt className="text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2">
+              <dt className="text-[11px] uppercase tracking-wide text-slate-500">
                 Return
               </dt>
-              <dd className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              <dd className="mt-1 text-sm font-semibold text-white">
                 {mockTradingDay.summary.returnPercent >= 0 ? "+" : ""}
                 {mockTradingDay.summary.returnPercent.toFixed(2)}%
               </dd>
             </div>
-            <div className="rounded-xl border border-zinc-200 bg-zinc-50/80 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/60">
-              <dt className="text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2">
+              <dt className="text-[11px] uppercase tracking-wide text-slate-500">
                 Paper moves
               </dt>
-              <dd className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              <dd className="mt-1 text-sm font-semibold text-white">
                 {mockTradingDay.summary.buys} buy / {mockTradingDay.summary.sells} sell
               </dd>
             </div>
           </dl>
 
-          <details className="mt-4 overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800">
-            <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+          <details className="mt-4 overflow-hidden rounded-2xl border border-slate-800 bg-slate-950/70">
+            <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-white">
               Show the step-by-step replay
             </summary>
-            <div className="max-h-80 overflow-auto border-t border-zinc-200 dark:border-zinc-800">
-              <table className="min-w-full divide-y divide-zinc-200 text-sm dark:divide-zinc-800">
-                <thead className="bg-zinc-50 dark:bg-zinc-900/80">
-                  <tr className="text-left text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            <div className="max-h-80 overflow-auto border-t border-slate-800">
+              <table className="min-w-full divide-y divide-slate-800 text-sm">
+                <thead className="bg-slate-900">
+                  <tr className="text-left text-[11px] uppercase tracking-wide text-slate-500">
                     <th className="px-3 py-2">Step</th>
                     <th className="px-3 py-2">Date</th>
                     <th className="px-3 py-2">Price</th>
@@ -926,16 +939,16 @@ export function TradePage() {
                     <th className="px-3 py-2">Practice balance</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-100 dark:divide-zinc-900">
+                <tbody className="divide-y divide-slate-800/70">
                   {mockTradingDay.steps.map((step) => (
                     <tr key={`${step.slot}-${step.sourceDate}`}>
-                      <td className="px-3 py-2 font-mono text-zinc-700 dark:text-zinc-300">
+                      <td className="px-3 py-2 font-mono text-slate-300">
                         {step.slot}
                       </td>
-                      <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">
+                      <td className="px-3 py-2 text-slate-400">
                         {step.sourceDate}
                       </td>
-                      <td className="px-3 py-2 text-zinc-900 dark:text-zinc-100">
+                      <td className="px-3 py-2 text-white">
                         ${step.price.toFixed(2)}
                       </td>
                       <td className="px-3 py-2">
@@ -956,7 +969,7 @@ export function TradePage() {
                           {ACTION_LABELS[step.action]}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-zinc-900 dark:text-zinc-100">
+                      <td className="px-3 py-2 text-white">
                         ${step.equity.toFixed(2)}
                       </td>
                     </tr>
@@ -965,73 +978,19 @@ export function TradePage() {
               </table>
             </div>
           </details>
-          <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
+          <p className="mt-3 text-xs text-slate-500">
             Source: {mockTradingDay.datasetSource}
           </p>
         </section>
       ) : null}
 
-      {paperTradeLog.length && isAdvancedView ? (
-        <section className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                Recent paper activity
-              </h2>
-              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-                The newest practice moves from this browser session.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={clearPaperTradeLog}
-              className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
-            >
-              Clear log
-            </button>
-          </div>
-
-          <div className="mt-4 max-h-72 overflow-auto rounded-2xl border border-zinc-200 dark:border-zinc-800">
-            <ul className="divide-y divide-zinc-100 dark:divide-zinc-900">
-              {paperTradeLog.map((entry) => (
-                <li key={entry.id} className="px-4 py-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
-                      {new Date(entry.timestamp).toLocaleTimeString()}
-                    </span>
-                    <span className="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                      {entry.ticker}
-                    </span>
-                    <span
-                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
-                        ACTION_BADGES[entry.action]
-                      }`}
-                    >
-                      {ACTION_LABELS[entry.action]}
-                    </span>
-                    <span
-                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
-                        SIGNAL_BADGES[entry.signal]
-                      }`}
-                    >
-                      {SIGNAL_LABELS[entry.signal]}
-                    </span>
-                  </div>
-                  <p className="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
-                    {entry.submitted
-                      ? entry.statusMessage
-                      : `No paper trade placed. ${entry.statusMessage}`}
-                  </p>
-                  <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                    Risk style: {MODEL_PROFILE_LABELS[entry.modelProfile]} | Confidence:{" "}
-                    {entry.confidence.toFixed(1)}%
-                  </p>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </section>
-      ) : null}
+      <button
+        type="button"
+        onClick={clearPaperTradeLog}
+        className="self-start rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs font-semibold text-slate-300 transition hover:border-slate-600 hover:bg-slate-800"
+      >
+        Clear trade log
+      </button>
 
       <AiDisclaimer />
     </div>

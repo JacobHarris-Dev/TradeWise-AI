@@ -26,8 +26,8 @@ export function MainNav() {
             href={href}
             className={`rounded-lg px-3 py-2 text-sm font-medium transition ${
               active
-                ? "bg-zinc-900 text-white"
-                : "text-zinc-600 hover:bg-zinc-100"
+                ? "bg-indigo-500/15 text-indigo-300"
+                : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
             }`}
           >
             {label}

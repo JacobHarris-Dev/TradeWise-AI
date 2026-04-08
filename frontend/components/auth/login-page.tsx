@@ -95,7 +95,7 @@ export function LoginPage() {
 
   if (authLoading) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center text-sm text-zinc-500">
+      <div className="flex min-h-[60vh] items-center justify-center text-sm text-slate-400">
         Checking session…
       </div>
     );
@@ -103,18 +103,18 @@ export function LoginPage() {
 
   return (
     <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-lg flex-col justify-center px-4 py-12">
-      <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm">
+      <div className="rounded-3xl border border-slate-800 bg-slate-900/90 p-8 shadow-2xl shadow-slate-950/30">
         <div className="mb-8 text-center">
           <Link
             href="/"
-            className="inline-block rounded-lg outline-none ring-offset-2 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-white"
+            className="inline-block rounded-lg outline-none ring-offset-2 ring-offset-slate-950 focus-visible:ring-2 focus-visible:ring-indigo-500"
           >
             <BrandLogo priority />
           </Link>
-          <h1 className="mt-8 text-2xl font-semibold tracking-tight text-zinc-900">
+          <h1 className="mt-8 text-2xl font-semibold tracking-tight text-white">
             Sign in
           </h1>
-          <p className="mt-1 text-sm text-zinc-600">
+          <p className="mt-1 text-sm text-slate-400">
             Save your trade workspace and paper-trading data after you sign in.
           </p>
         </div>
@@ -123,7 +123,7 @@ export function LoginPage() {
           type="button"
           disabled={pending}
           onClick={() => void onGoogle()}
-          className="flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white py-2.5 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:opacity-60"
+          className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-950 py-2.5 text-sm font-medium text-slate-100 transition hover:border-slate-600 hover:bg-slate-800 disabled:opacity-60"
         >
           <svg className="h-5 w-5" viewBox="0 0 24 24" aria-hidden>
             <path
@@ -148,14 +148,14 @@ export function LoginPage() {
 
         <div className="relative my-6">
           <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-zinc-200" />
+            <div className="w-full border-t border-slate-800" />
           </div>
           <div className="relative flex justify-center text-xs uppercase">
-            <span className="bg-white px-2 text-zinc-500">Or email</span>
+            <span className="bg-slate-900 px-2 text-slate-500">Or email</span>
           </div>
         </div>
 
-        <div className="mb-4 flex rounded-lg bg-zinc-100 p-1">
+        <div className="mb-4 flex rounded-xl border border-slate-800 bg-slate-950 p-1">
           <button
             type="button"
             onClick={() => {
@@ -164,8 +164,8 @@ export function LoginPage() {
             }}
             className={`flex-1 rounded-md py-2 text-sm font-medium transition ${
               mode === "signin"
-                ? "bg-white text-zinc-900 shadow"
-                : "text-zinc-600"
+                ? "bg-slate-800 text-white shadow"
+                : "text-slate-400"
             }`}
           >
             Sign in
@@ -178,8 +178,8 @@ export function LoginPage() {
             }}
             className={`flex-1 rounded-md py-2 text-sm font-medium transition ${
               mode === "signup"
-                ? "bg-white text-zinc-900 shadow"
-                : "text-zinc-600"
+                ? "bg-slate-800 text-white shadow"
+                : "text-slate-400"
             }`}
           >
             Create account
@@ -187,7 +187,7 @@ export function LoginPage() {
         </div>
 
         <form onSubmit={(e) => void onEmailSubmit(e)} className="flex flex-col gap-3">
-          <label className="text-xs font-medium text-zinc-600">
+          <label className="text-xs font-medium text-slate-400">
             Email
             <input
               type="email"
@@ -195,10 +195,10 @@ export function LoginPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900"
+              className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-indigo-500"
             />
           </label>
-          <label className="text-xs font-medium text-zinc-600">
+          <label className="text-xs font-medium text-slate-400">
             Password
             <input
               type="password"
@@ -209,16 +209,16 @@ export function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
               minLength={6}
-              className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900"
+              className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-indigo-500"
             />
           </label>
           {error ? (
-            <p className="text-sm text-red-600">{error}</p>
+            <p className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">{error}</p>
           ) : null}
           <button
             type="submit"
             disabled={pending}
-            className="mt-1 rounded-lg bg-zinc-900 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-60"
+            className="mt-1 rounded-xl bg-indigo-500 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-indigo-400 disabled:opacity-60"
           >
             {pending
               ? "Working…"
@@ -228,10 +228,10 @@ export function LoginPage() {
           </button>
         </form>
 
-        <p className="mt-6 text-center text-sm text-zinc-500">
+        <p className="mt-6 text-center text-sm text-slate-500">
           <Link
             href="/"
-            className="font-medium text-zinc-700 underline"
+            className="font-medium text-slate-300 underline"
           >
             View homepage
           </Link>

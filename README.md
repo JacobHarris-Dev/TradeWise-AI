@@ -16,6 +16,34 @@ That starts both services together:
 - Frontend: `http://localhost:3000`
 - Backend: `http://127.0.0.1:8000`
 
+## Split Machine Setup
+
+You can run the web app and most of the backend on your MacBook, while the LLM
+itself runs on your desktop PC.
+
+Recommended wiring:
+
+- MacBook runs `frontend/` and `backend/`
+- Desktop PC runs only an OpenAI-compatible model server
+- `backend/.env` points `ML_QWEN_REMOTE_BASE_URL` at the desktop server
+- `frontend/.env.local` points `ML_BACKEND_URL` at the MacBook backend
+
+Example:
+
+```bash
+# frontend/.env.local
+ML_BACKEND_URL=http://192.168.1.50:8000
+
+# backend/.env
+ML_QWEN_REMOTE_BASE_URL=http://192.168.1.77:8001
+ML_QWEN_REMOTE_API_KEY=your-key-if-needed
+ML_QWEN_REMOTE_MODEL=Qwen/Qwen2.5-0.5B-Instruct
+```
+
+The backend will use the remote desktop model for chat when `ML_QWEN_REMOTE_BASE_URL`
+is set. If the remote model is unavailable, it falls back to the local Qwen path
+or the template reply, depending on your other env flags.
+
 ## Layout
 
 - `frontend/app/api/ml/*`: Next route handlers that proxy browser requests to Python.
@@ -28,6 +56,16 @@ That starts both services together:
 - Backend settings stay in `backend/.env.example`.
 - The root `scripts/dev.mjs` loader also reads a root `.env` for compatibility with the current local setup.
 - Training can use `yfinance` by default, while runtime market data can be switched to Alpaca with `ML_MARKET_DATA_PROVIDER=alpaca` plus Alpaca API credentials.
+
+## Desktop LLM Server
+
+The remote model server only needs to expose an OpenAI-compatible endpoint:
+`POST /v1/chat/completions`.
+
+That can be a local serving stack on the desktop such as vLLM, Ollama with an
+OpenAI-compatible proxy, or another OpenAI-style inference server. The MacBook
+backend will send the chat prompt to that endpoint and keep all other backend
+logic local.
 
 ## Model Training
 

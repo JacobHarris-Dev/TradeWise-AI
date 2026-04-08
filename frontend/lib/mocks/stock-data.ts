@@ -112,6 +112,34 @@ export type AutoTradeBatchResult = {
   results: AutoTradeResult[];
 };
 
+export type WatchTradeLogEntry = {
+  id: string;
+  timestamp: string;
+  ticker: string;
+  modelProfile: ModelProfile;
+  action: "buy" | "sell" | "hold";
+  signal: TradeSignal;
+  confidence: number;
+  submitted: boolean;
+  statusMessage: string;
+};
+
+export type WatchSession = {
+  userId: string;
+  trackedTickers: string[];
+  modelProfile: ModelProfile;
+  cadence: RefreshCadence;
+  autoTradeEnabled: boolean;
+  running: boolean;
+  quotes: MockQuote[];
+  lastAutoTrade: AutoTradeResult | null;
+  paperTradeLog: WatchTradeLogEntry[];
+  lastError: string | null;
+  lastRunAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type NewsReport = {
   ticker: string;
   report: string;

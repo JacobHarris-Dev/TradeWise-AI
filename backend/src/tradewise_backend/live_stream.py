@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+from asyncio import Event, Lock, Queue, create_task, sleep
+from collections import defaultdict
 
 from fastapi import WebSocket
 
@@ -16,6 +18,90 @@ except ImportError:  # pragma: no cover - exercised only when websockets is miss
 ALLOWED_STREAM_FEEDS = {"iex", "delayed_sip", "sip"}
 DEFAULT_STREAM_FEED = os.getenv("ML_LIVE_STREAM_FEED", "iex").strip().lower() or "iex"
 MAX_STREAM_SYMBOLS = 30
+_STREAM_LOCK = Lock()
+
+
+class _StreamChannel:
+    def __init__(self, upstream_url: str, feed: LiveStreamFeed, tickers: list[str], key_id: str, secret_key: str):
+        self.upstream_url = upstream_url
+        self.feed = feed
+        self.tickers = tickers
+        self.key_id = key_id
+        self.secret_key = secret_key
+        self.subscribers: set[Queue[dict]] = set()
+        self.started = False
+        self.stopped = Event()
+        self.task = None
+
+    async def start(self) -> None:
+        if self.started:
+            return
+        self.started = True
+        self.task = create_task(self._run())
+
+    async def _run(self) -> None:
+        backoff = 1.0
+        while not self.stopped.is_set():
+            try:
+                async with websockets.connect(self.upstream_url, ping_interval=20, ping_timeout=20) as upstream:
+                    await upstream.send(
+                        json.dumps({"action": "auth", "key": self.key_id, "secret": self.secret_key})
+                    )
+                    await upstream.recv()
+                    await upstream.send(json.dumps({"action": "subscribe", "trades": self.tickers}))
+                    backoff = 1.0
+                    while not self.stopped.is_set():
+                        payload = await upstream.recv()
+                        messages = json.loads(payload)
+                        if not isinstance(messages, list):
+                            continue
+                        for message in messages:
+                            if isinstance(message, dict):
+                                await self._broadcast(message)
+            except Exception:
+                if self.stopped.is_set():
+                    break
+                await sleep(backoff)
+                backoff = min(backoff * 2, 15.0)
+
+    async def _broadcast(self, message: dict) -> None:
+        if message.get("T") == "t" and message.get("S") in self.tickers:
+            payload = LiveTradeTick(
+                symbol=str(message["S"]),
+                price=float(message["p"]),
+                size=int(message.get("s", 0)) if message.get("s") is not None else None,
+                timestamp=str(message.get("t", "")),
+                feed=self.feed,
+            ).model_dump()
+        elif message.get("T") == "error":
+            payload = LiveStreamError(message=str(message.get("msg", "Live stream error."))).model_dump()
+        else:
+            return
+
+        stale: list[Queue[dict]] = []
+        for subscriber in list(self.subscribers):
+            try:
+                subscriber.put_nowait(payload)
+            except Exception:
+                stale.append(subscriber)
+        for subscriber in stale:
+            self.subscribers.discard(subscriber)
+
+    async def subscribe(self) -> Queue[dict]:
+        queue: Queue[dict] = Queue(maxsize=100)
+        self.subscribers.add(queue)
+        await self.start()
+        return queue
+
+    def unsubscribe(self, queue: Queue[dict]) -> None:
+        self.subscribers.discard(queue)
+        if not self.subscribers:
+            self.stopped.set()
+            if self.task is not None:
+                self.task.cancel()
+
+
+_CHANNELS: dict[str, _StreamChannel] = {}
 
 
 def normalize_live_stream_feed(raw_feed: str | None) -> LiveStreamFeed:
@@ -71,44 +157,27 @@ async def relay_live_trade_stream(
     await websocket.accept()
 
     try:
-        async with websockets.connect(upstream_url, ping_interval=20, ping_timeout=20) as upstream:
-            await upstream.send(
-                json.dumps({"action": "auth", "key": key_id, "secret": secret_key})
+        channel_key = f"{feed}:{','.join(tickers)}"
+        async with _STREAM_LOCK:
+            channel = _CHANNELS.get(channel_key)
+            if channel is None:
+                channel = _StreamChannel(upstream_url, feed, tickers, key_id, secret_key)
+                _CHANNELS[channel_key] = channel
+        queue = await channel.subscribe()
+
+        for ticker in tickers:
+            await websocket.send_json(
+                LiveStreamStatus(symbol=ticker, feed=feed, status="connected").model_dump()
             )
-            await upstream.recv()
-            await upstream.send(json.dumps({"action": "subscribe", "trades": tickers}))
-            for ticker in tickers:
-                await websocket.send_json(
-                    LiveStreamStatus(
-                        symbol=ticker,
-                        feed=feed,
-                        status="connected",
-                    ).model_dump()
-                )
 
-            while True:
-                payload = await upstream.recv()
-                messages = json.loads(payload)
-                if not isinstance(messages, list):
-                    continue
-
-                for message in messages:
-                    if not isinstance(message, dict):
-                        continue
-                    if message.get("T") == "t" and message.get("S") in tickers:
-                        await websocket.send_json(
-                            LiveTradeTick(
-                                symbol=str(message["S"]),
-                                price=float(message["p"]),
-                                size=int(message.get("s", 0)) if message.get("s") is not None else None,
-                                timestamp=str(message.get("t", "")),
-                                feed=feed,
-                            ).model_dump()
-                        )
-                    elif message.get("T") == "error":
-                        await websocket.send_json(
-                            LiveStreamError(message=str(message.get("msg", "Live stream error."))).model_dump()
-                        )
-                        return
+        while True:
+            message = await queue.get()
+            await websocket.send_json(message)
     finally:
+        async with _STREAM_LOCK:
+            channel = _CHANNELS.get(channel_key)
+            if channel is not None:
+                channel.unsubscribe(queue)  # type: ignore[arg-type]
+                if not channel.subscribers:
+                    _CHANNELS.pop(channel_key, None)
         await websocket.close()

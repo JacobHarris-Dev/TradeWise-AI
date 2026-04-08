@@ -12,6 +12,7 @@ import type {
   ModelProfile,
   StockRecommendation,
   StockRecommendationsResponse,
+  WatchSession,
 } from "@/lib/mocks/stock-data";
 
 /**
@@ -55,6 +56,7 @@ export async function fetchStockQuotes(
   options: {
     includeChart?: boolean;
     modelProfile?: ModelProfile;
+    provider?: "yfinance" | "alpaca";
   } = {},
 ): Promise<{
   results: MockQuote[];
@@ -76,6 +78,9 @@ export async function fetchStockQuotes(
   });
   if (options.modelProfile) {
     params.set("modelProfile", options.modelProfile);
+  }
+  if (options.provider) {
+    params.set("provider", options.provider);
   }
 
   const response = await fetch(`/api/ml/quotes?${params.toString()}`, {
@@ -237,6 +242,66 @@ export async function executeAutoTradeBatch(
   }
 
   return ((await response.json()) as AutoTradeBatchResult).results;
+}
+
+export async function startWatchSession(
+  tickers: string[],
+  options: {
+    modelProfile?: ModelProfile;
+    cadence?: RefreshCadence;
+    userId?: string;
+    autoTradeEnabled?: boolean;
+  } = {},
+): Promise<WatchSession> {
+  const normalizedTickers = Array.from(
+    new Set(
+      tickers.map((ticker) => ticker.trim().toUpperCase()).filter(Boolean),
+    ),
+  ).slice(0, 3);
+  if (!normalizedTickers.length) {
+    throw new Error("Load at least one ticker to start a watch session.");
+  }
+
+  const response = await fetch("/api/ml/watch/start", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    cache: "no-store",
+    body: JSON.stringify({
+      userId: options.userId ?? "guest",
+      tickers: normalizedTickers,
+      modelProfile: options.modelProfile ?? "risky",
+      cadence: options.cadence ?? "1m",
+      autoTradeEnabled: options.autoTradeEnabled ?? false,
+    }),
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response);
+    throw new Error(message || "Could not start watch session.");
+  }
+
+  return (await response.json()) as WatchSession;
+}
+
+export async function fetchWatchSession(userId?: string): Promise<WatchSession> {
+  const params = new URLSearchParams();
+  if (userId?.trim()) {
+    params.set("userId", userId.trim());
+  }
+  const query = params.toString();
+  const url = query ? `/api/ml/watch?${query}` : "/api/ml/watch";
+  const response = await fetch(url, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response);
+    throw new Error(message || "Could not load watch session.");
+  }
+
+  return (await response.json()) as WatchSession;
 }
 
 export async function fetchPaperAccount(userId?: string): Promise<PaperAccount> {

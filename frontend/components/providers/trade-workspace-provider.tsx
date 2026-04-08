@@ -34,6 +34,7 @@ import {
   fetchPaperAccount,
   fetchPaperAccountPerformance,
   fetchStockQuotes,
+  fetchWatchSession,
 } from "@/lib/stock-quote";
 import {
   createSimulationFromQuotes,
@@ -249,11 +250,7 @@ export function TradeWorkspaceProvider({
   const [streamError, setStreamError] = useState<string | null>(null);
   const [lastTickAt, setLastTickAt] = useState<string | null>(null);
   const [clock, setClock] = useState(() => new Date());
-  const [simulation, setSimulation] = useState<TradingSimulation | null>(null);
-  const [persistedTradingState, setPersistedTradingState] =
-    useState<PersistedTradingState | null>(null);
-  const [hasHydratedPersistedState, setHasHydratedPersistedState] =
-    useState(false);
+  const [watchSyncTick, setWatchSyncTick] = useState(0);
   const skipInitialQuotesRefreshRef = useRef(false);
   const skipInitialPaperAccountRefreshRef = useRef(false);
   const skipInitialNewsRefreshRef = useRef(false);
@@ -785,16 +782,14 @@ export function TradeWorkspaceProvider({
   ]);
 
   useEffect(() => {
-    if (tradeMode !== "model" || !marketSnapshot.isOpen || !trackedTickers.length) {
+    if (!marketSnapshot.isOpen || !trackedTickers.length) {
       return;
     }
 
     const timer = window.setInterval(() => {
       if (autoTradeEnabled) {
         void runAutoTrade();
-        return;
       }
-      void loadTrackedQuotes(trackedTickers);
     }, CADENCE_MS[refreshCadence]);
 
     return () => window.clearInterval(timer);
@@ -805,8 +800,56 @@ export function TradeWorkspaceProvider({
     refreshCadence,
     runAutoTrade,
     trackedTickers,
-    tradeMode,
   ]);
+
+  useEffect(() => {
+    if (!trackedTickers.length) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setWatchSyncTick((current) => current + 1);
+    }, 30_000);
+
+    return () => window.clearInterval(timer);
+  }, [trackedTickers.length]);
+
+  useEffect(() => {
+    if (!trackedTickers.length) {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const session = await fetchWatchSession(accountUserId);
+        if (cancelled) {
+          return;
+        }
+        if (session.quotes.length) {
+          setQuotesByTicker((current) => {
+            const merged = { ...current };
+            for (const quote of session.quotes) {
+              merged[quote.ticker] = quote;
+            }
+            return merged;
+          });
+        }
+        if (session.lastAutoTrade) {
+          setAutoTradeResult(session.lastAutoTrade);
+        }
+        if (session.paperTradeLog.length) {
+          setPaperTradeLog(session.paperTradeLog);
+        }
+      } catch {
+        // If the background session has not started yet, the local view still works.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accountUserId, trackedTickers.length, watchSyncTick]);
 
   useEffect(() => {
     if (!autoTradeEnabled || tradeMode !== "model" || !marketSnapshot.isOpen) {
@@ -817,7 +860,7 @@ export function TradeWorkspaceProvider({
   }, [autoTradeEnabled, marketSnapshot.isOpen, runAutoTrade, tradeMode]);
 
   useEffect(() => {
-    if (tradeMode !== "model" || !selectedTicker) {
+    if (!selectedTicker) {
       return;
     }
 
@@ -832,82 +875,90 @@ export function TradeWorkspaceProvider({
     }, CADENCE_MS[refreshCadence]);
 
     return () => window.clearInterval(timer);
-  }, [loadNewsReport, refreshCadence, selectedTicker, tradeMode]);
+  }, [loadNewsReport, refreshCadence, selectedTicker]);
 
   useEffect(() => {
-    if (!trackedTickers.length || !marketSnapshot.isOpen || tradeMode !== "model") {
+    if (!trackedTickers.length || !marketSnapshot.isOpen) {
       setStreamConnected(false);
       return;
     }
 
-    const symbolsParam = trackedTickers.join(",");
-    const ws = new WebSocket(
-      `${getMlBackendWebSocketUrl()}/v1/ws/trades?symbols=${encodeURIComponent(symbolsParam)}&feed=iex`,
-    );
+    let ws: WebSocket | null = null;
+    
+    // Add a debounce to entirely avoid the Alpaca "1 connection" API limit during fast hot-reloads
+    const timer = window.setTimeout(() => {
+      const symbolsParam = trackedTickers.join(",");
+      ws = new WebSocket(
+        `${getMlBackendWebSocketUrl()}/v1/ws/trades?symbols=${encodeURIComponent(symbolsParam)}&feed=iex`,
+      );
 
-    ws.onopen = () => {
-      setStreamConnected(true);
-      setStreamError(null);
-    };
+      ws.onopen = () => {
+        setStreamConnected(true);
+        setStreamError(null);
+      };
 
-    ws.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data) as
-          | LiveTradeTick
-          | { type: "status"; status: string }
-          | { type: "error"; message: string };
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data) as
+            | LiveTradeTick
+            | { type: "status"; status: string }
+            | { type: "error"; message: string };
 
-        if (message.type === "error") {
-          setStreamError(message.message);
-          return;
-        }
-
-        if (message.type !== "trade") {
-          return;
-        }
-
-        setLastTickAt(message.timestamp);
-        setQuotesByTicker((current) => {
-          const currentQuote = current[message.symbol];
-          if (!currentQuote) {
-            return current;
+          if (message.type === "error") {
+            setStreamError(message.message);
+            return;
           }
-          const nextHistory = [...(currentQuote.history ?? []), message.price].slice(
-            -120,
-          );
-          const previousPrice =
-            currentQuote.history?.[currentQuote.history.length - 1] ??
-            currentQuote.lastPrice;
-          const nextChange =
-            previousPrice > 0
-              ? Number((((message.price / previousPrice) - 1) * 100).toFixed(2))
-              : currentQuote.changePercent;
 
-          return {
-            ...current,
-            [message.symbol]: {
-              ...currentQuote,
-              lastPrice: message.price,
-              changePercent: nextChange,
-              history: nextHistory,
-            },
-          };
-        });
-      } catch {
-        setStreamError("Could not parse the live trade stream.");
-      }
-    };
+          if (message.type !== "trade") {
+            return;
+          }
 
-    ws.onerror = () => {
-      setStreamError("Live trade stream connection failed.");
-    };
+          setLastTickAt(message.timestamp);
+          setQuotesByTicker((current) => {
+            const currentQuote = current[message.symbol];
+            if (!currentQuote) {
+              return current;
+            }
+            const nextHistory = [...(currentQuote.history ?? []), message.price].slice(
+              -120,
+            );
+            const previousPrice =
+              currentQuote.history?.[currentQuote.history.length - 1] ??
+              currentQuote.lastPrice;
+            const nextChange =
+              previousPrice > 0
+                ? Number((((message.price / previousPrice) - 1) * 100).toFixed(2))
+                : currentQuote.changePercent;
 
-    ws.onclose = () => {
-      setStreamConnected(false);
-    };
+            return {
+              ...current,
+              [message.symbol]: {
+                ...currentQuote,
+                lastPrice: message.price,
+                changePercent: nextChange,
+                history: nextHistory,
+              },
+            };
+          });
+        } catch {
+          setStreamError("Could not parse the live trade stream.");
+        }
+      };
+
+      ws.onerror = () => {
+        setStreamError("Live trade stream connection failed.");
+      };
+
+      ws.onclose = () => {
+        setStreamConnected(false);
+      };
+    }, 500);
 
     return () => {
-      ws.close();
+      window.clearTimeout(timer);
+      if (ws) {
+        ws.close();
+      }
     };
   }, [marketSnapshot.isOpen, trackedTickers, tradeMode]);
 
