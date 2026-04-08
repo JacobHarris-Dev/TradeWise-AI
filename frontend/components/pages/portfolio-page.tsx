@@ -51,7 +51,7 @@ export function PortfolioPage() {
     portfolioError: error,
     refreshPortfolio,
   } = usePortfolioWorkspace();
-  const { paperTradeLog } = useTradeWorkspace();
+  const { trackedTickers, paperTradeLog } = useTradeWorkspace();
   const [featuredQuotes, setFeaturedQuotes] = useState<MockQuote[]>([]);
   const [featuredLoading, setFeaturedLoading] = useState(true);
 
@@ -75,11 +75,10 @@ export function PortfolioPage() {
   }, [portfolio, positionRows]);
 
   const featuredSymbols = useMemo(() => {
-    const positionSymbols = portfolio?.positions.map((position) => position.ticker) ?? [];
     return Array.from(
-      new Set([...positionSymbols, ...DEFAULT_FEATURED_TICKERS]),
+      new Set([...trackedTickers, ...DEFAULT_FEATURED_TICKERS]),
     ).slice(0, 3);
-  }, [portfolio?.positions]);
+  }, [trackedTickers]);
 
   useEffect(() => {
     let cancelled = false;
@@ -89,6 +88,7 @@ export function PortfolioPage() {
         setFeaturedLoading(true);
         const batch = await fetchStockQuotes(featuredSymbols, {
           includeChart: false,
+          provider: "yfinance",
         });
         if (!cancelled) {
           setFeaturedQuotes(batch.results);

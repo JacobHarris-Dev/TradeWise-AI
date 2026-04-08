@@ -9,6 +9,7 @@ import {
   fetchPaperAccount,
   fetchStockQuotes,
   fetchStockRecommendations,
+  startWatchSession,
 } from "@/lib/stock-quote";
 import {
   buildQuoteMap,
@@ -125,6 +126,13 @@ export function TradeStarterSectors() {
         TRADE_STORAGE_KEYS.trackedTickers,
         quotes.map((quote) => quote.ticker),
       );
+      await startWatchSession(quotes.map((quote) => quote.ticker), {
+        userId: accountUserId,
+        modelProfile,
+        cadence: refreshCadence,
+        autoTradeEnabled: false,
+      });
+
       hydrateWorkspace({
         savedAt: Date.now(),
         trackedTickers: quotes.map((quote) => quote.ticker),

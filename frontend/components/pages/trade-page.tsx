@@ -2,12 +2,13 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { startTransition, useEffect, useState } from "react";
+import { startTransition, useEffect, useMemo, useState } from "react";
 import { TradeStarterSectors } from "@/components/dashboard/trade-starter-sectors";
 import { AiDisclaimer } from "@/components/layout/ai-disclaimer";
 import { useTradeWorkspace } from "@/components/providers/trade-workspace-provider";
 import { LiveLineChart } from "@/components/stock/live-line-chart";
 import { StockCard } from "@/components/stock/stock-card";
+import { TradeTickerNewsReport } from "@/components/trade/trade-market-news";
 import type { ModelProfile, RefreshCadence } from "@/lib/mocks/stock-data";
 import { MAX_TRACKED_TICKERS, type TradeMode } from "@/lib/trade-workspace";
 
@@ -72,7 +73,6 @@ export function TradePage() {
     trackedTickers,
     selectedTicker,
     quotesByTicker,
-    loading,
     error,
     lastAction,
     tradeMode,
@@ -101,7 +101,6 @@ export function TradePage() {
     setModelProfile,
     setRefreshCadence,
     setAutoTradeEnabled,
-    checkSelectedStocks,
     selectTrackedTicker,
     removeTrackedTicker,
     loadNewsReport,
@@ -139,18 +138,12 @@ export function TradePage() {
   const trackedTickerSummary = trackedTickers.length
     ? trackedTickers.join(", ")
     : currentSymbol;
-  const visibleNewsHeadlines =
-    newsReport?.newsHeadlines?.length
-      ? newsReport.newsHeadlines
-      : quote?.newsHeadlines ?? [];
   const streamStatusDescription =
-    tradeMode !== "model"
+    !marketSnapshot.isOpen
       ? null
-      : !marketSnapshot.isOpen
-        ? "Live stream paused until market open"
-        : streamConnected
-          ? "Live stream connected"
-          : "Connecting to IEX stream";
+      : streamConnected
+        ? "Live stream connected"
+        : "Connecting to IEX stream";
   const marketStatusLine = streamStatusDescription
     ? `${marketSnapshot.statusLabel} | ${streamStatusDescription}`
     : marketSnapshot.statusLabel;
@@ -159,6 +152,18 @@ export function TradePage() {
     : streamConnected
       ? "Connected"
       : "Connecting";
+  const paperTradeStats = useMemo(() => {
+    return paperTradeLog.reduce(
+      (acc, entry) => {
+        acc.total += 1;
+        if (entry.action === "buy") acc.buys += 1;
+        if (entry.action === "sell") acc.sells += 1;
+        if (entry.action === "hold") acc.holds += 1;
+        return acc;
+      },
+      { total: 0, buys: 0, sells: 0, holds: 0 },
+    );
+  }, [paperTradeLog]);
 
   return (
     <div className="flex max-w-6xl flex-col gap-4 text-slate-100">
@@ -178,7 +183,7 @@ export function TradePage() {
           </span>
           <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
             {marketStatusLine}
-            {tradeMode === "model" ? ` | IEX: ${liveFeedLabel}` : null}
+            {marketSnapshot.isOpen ? ` | IEX: ${liveFeedLabel}` : null}
           </p>
         </div>
 
@@ -255,37 +260,98 @@ export function TradePage() {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-              Trade basket
+              Trade activity
             </p>
             <p className="mt-1 text-sm text-slate-400">
-              This page works from the tracked symbols below. Load a starter basket from the sectors panel above.
+              This log shows the latest paper buys, sells, and holds TradeWise has made.
             </p>
-            {!trackedTickers.length ? (
+            {!paperTradeLog.length ? (
               <p className="mt-2 text-sm text-slate-400">
-                No tracked symbols loaded. <Link href="#trade-setup" className="font-semibold text-indigo-300 underline underline-offset-4">Use the sectors panel above</Link> to preload a basket.
+                No paper trades yet. Turn on paper trading or run a check to start the log.
               </p>
             ) : null}
           </div>
+          <div className="flex flex-wrap gap-2 text-xs text-slate-400">
+            <span className="rounded-full border border-slate-700 bg-slate-950/70 px-3 py-1 text-slate-300">
+              {paperTradeStats.total} entries
+            </span>
+            <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-emerald-300">
+              {paperTradeStats.buys} buys
+            </span>
+            <span className="rounded-full border border-rose-500/20 bg-rose-500/10 px-3 py-1 text-rose-300">
+              {paperTradeStats.sells} sells
+            </span>
+            <span className="rounded-full border border-slate-700 bg-slate-950/70 px-3 py-1 text-slate-300">
+              {paperTradeStats.holds} holds
+            </span>
+          </div>
+        </div>
 
-          <div className="flex flex-wrap gap-2">
-            {tradeMode === "model" ? (
-              <button
-                type="button"
-                onClick={() => void loadMockTradingDay()}
-                disabled={mockTradingLoading || !selectedTicker}
-                className="rounded-xl border border-slate-700 bg-slate-950 px-4 py-2.5 text-sm font-medium text-slate-100 transition hover:border-slate-600 hover:bg-slate-800 disabled:opacity-60"
-              >
-                {mockTradingLoading ? "Loading..." : "Replay a practice day"}
-              </button>
-            ) : null}
+        <div className="mt-4 flex flex-wrap gap-2">
+          {tradeMode === "model" ? (
             <button
               type="button"
-              onClick={() => void checkSelectedStocks()}
-              disabled={loading || !trackedTickers.length}
-              className="rounded-xl bg-indigo-500 px-4 py-2.5 text-sm font-medium text-slate-950 transition hover:bg-indigo-400 disabled:opacity-60"
+              onClick={() => void loadMockTradingDay()}
+              disabled={mockTradingLoading || !selectedTicker}
+              className="rounded-xl border border-slate-700 bg-slate-950 px-4 py-2.5 text-sm font-medium text-slate-100 transition hover:border-slate-600 hover:bg-slate-800 disabled:opacity-60"
             >
-              {loading ? "Checking..." : "Check selected stocks"}
+              {mockTradingLoading ? "Loading..." : "Replay a practice day"}
             </button>
+          ) : null}
+        </div>
+
+        {paperTradeLog.length ? (
+          <div className="mt-4 max-h-72 overflow-auto rounded-2xl border border-slate-800 bg-slate-950/70">
+            <ul className="divide-y divide-slate-800/70">
+              {paperTradeLog.map((entry) => (
+                <li key={entry.id} className="px-4 py-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                      {new Date(entry.timestamp).toLocaleTimeString()}
+                    </span>
+                    <span className="font-mono text-sm font-semibold text-white">
+                      {entry.ticker}
+                    </span>
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
+                        ACTION_BADGES[entry.action]
+                      }`}
+                    >
+                      {ACTION_LABELS[entry.action]}
+                    </span>
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
+                        SIGNAL_BADGES[entry.signal]
+                      }`}
+                    >
+                      {SIGNAL_LABELS[entry.signal]}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm text-slate-300">
+                    {entry.submitted
+                      ? entry.statusMessage
+                      : `No paper trade placed. ${entry.statusMessage}`}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Risk style: {MODEL_PROFILE_LABELS[entry.modelProfile]} | Confidence:{" "}
+                    {entry.confidence.toFixed(1)}%
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-5 shadow-lg shadow-slate-950/20">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Live tracking
+            </p>
+            <p className="mt-1 text-sm text-slate-400">
+              This page refreshes the tracked symbols automatically while the market is open.
+            </p>
           </div>
         </div>
 
@@ -633,52 +699,14 @@ export function TradePage() {
                   </p>
                 )}
 
-                {tradeMode === "model" ? (
-                  <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/80 px-4 py-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                        Live news report
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => void loadNewsReport({ forceRefresh: true, showLoading: true })}
-                        className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs font-semibold text-slate-300 transition hover:border-slate-600 hover:bg-slate-800"
-                        disabled={newsReportLoading}
-                      >
-                        {newsReportLoading ? "Refreshing..." : "Refresh now"}
-                      </button>
-                    </div>
-                    <div className="mt-3 rounded-xl border border-slate-800 bg-slate-900/90 px-3 py-2">
-                      <p className="text-sm font-semibold text-white">
-                        {SIGNAL_LABELS[newsReport?.signal ?? quote.signal]} •{" "}
-                        {(newsReport?.confidence ?? quote.confidence ?? 0).toFixed(1)}%
-                        {" "}confidence
-                      </p>
-                    </div>
-                    <p className="mt-3 text-sm leading-6 text-slate-300">
-                      {newsReport?.studentReasoning ?? newsReport?.report ?? "No news report yet."}
-                    </p>
-                    {visibleNewsHeadlines.length ? (
-                      <div className="mt-3 space-y-2 text-sm leading-6 text-slate-300">
-                        {visibleNewsHeadlines.map((headline) => (
-                          <p key={headline}>{headline}</p>
-                        ))}
-                      </div>
-                    ) : null}
-                    {isAdvancedView ? (
-                      <p className="mt-2 text-xs text-slate-500">
-                        Updates every {CADENCE_LABELS[refreshCadence]} | Last refresh:{" "}
-                        {newsReport ? new Date(newsReport.refreshedAt).toLocaleTimeString() : "-"} | Source:{" "}
-                        {newsReport?.fromCache ? "cache" : "fresh"}
-                        {newsReport?.reasoningSource ? ` | Reasoning: ${newsReport.reasoningSource}` : ""}
-                      </p>
-                    ) : (
-                      <p className="mt-2 text-xs text-slate-500">
-                        News summary refreshed in the background.
-                      </p>
-                    )}
-                  </div>
-                ) : null}
+                <TradeTickerNewsReport
+                  quote={quote}
+                  newsReport={newsReport}
+                  newsReportLoading={newsReportLoading}
+                  onRefresh={() => void loadNewsReport({ forceRefresh: true, showLoading: true })}
+                  isAdvancedView={isAdvancedView}
+                  refreshCadence={refreshCadence}
+                />
               </section>
             ) : null}
 
@@ -851,67 +879,13 @@ export function TradePage() {
         </section>
       ) : null}
 
-      {paperTradeLog.length > 0 && isAdvancedView ? (
-        <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-5 shadow-lg shadow-slate-950/20">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-white">
-                Recent paper activity
-              </h2>
-              <p className="mt-1 text-sm text-slate-400">
-                The newest practice moves from this browser session.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={clearPaperTradeLog}
-              className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs font-semibold text-slate-300 transition hover:border-slate-600 hover:bg-slate-800"
-            >
-              Clear log
-            </button>
-          </div>
-
-          <div className="mt-4 max-h-72 overflow-auto rounded-2xl border border-slate-800 bg-slate-950/70">
-            <ul className="divide-y divide-slate-800/70">
-              {paperTradeLog.map((entry) => (
-                <li key={entry.id} className="px-4 py-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
-                      {new Date(entry.timestamp).toLocaleTimeString()}
-                    </span>
-                    <span className="font-mono text-sm font-semibold text-white">
-                      {entry.ticker}
-                    </span>
-                    <span
-                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
-                        ACTION_BADGES[entry.action]
-                      }`}
-                    >
-                      {ACTION_LABELS[entry.action]}
-                    </span>
-                    <span
-                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
-                        SIGNAL_BADGES[entry.signal]
-                      }`}
-                    >
-                      {SIGNAL_LABELS[entry.signal]}
-                    </span>
-                  </div>
-                  <p className="mt-2 text-sm text-slate-300">
-                    {entry.submitted
-                      ? entry.statusMessage
-                      : `No paper trade placed. ${entry.statusMessage}`}
-                  </p>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Risk style: {MODEL_PROFILE_LABELS[entry.modelProfile]} | Confidence:{" "}
-                    {entry.confidence.toFixed(1)}%
-                  </p>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </section>
-      ) : null}
+      <button
+        type="button"
+        onClick={clearPaperTradeLog}
+        className="self-start rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs font-semibold text-slate-300 transition hover:border-slate-600 hover:bg-slate-800"
+      >
+        Clear trade log
+      </button>
 
       <AiDisclaimer />
     </div>

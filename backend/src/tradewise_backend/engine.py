@@ -247,12 +247,13 @@ def build_quote_response(
     model_profile: str | None = None,
     chart_type: str | None = None,
     news_context_override: object = _MISSING_NEWS_CONTEXT,
+    provider: str | None = None,
 ) -> QuoteResponse:
     ticker = validate_ticker(normalize_ticker(raw_ticker))
     selected_model_profile = normalize_model_profile(model_profile)
     selected_chart_type = normalize_chart_type(chart_type)
     profile = _price_profile(ticker)
-    history = get_close_history(ticker, length=HISTORY_LENGTH)
+    history = get_close_history(ticker, length=HISTORY_LENGTH, provider=provider)
     latest_features = build_latest_features(history, annual_rate=DEFAULT_ANNUAL_RATE)
 
     technicals = TechnicalSnapshot(**asdict(latest_features))
@@ -318,7 +319,7 @@ def build_quote_response(
         technicals=technicals,
         chartDataUri=(
             _build_candlestick_chart_data_uri(
-                get_ohlc_history(ticker, length=HISTORY_LENGTH),
+                get_ohlc_history(ticker, length=HISTORY_LENGTH, provider=provider),
                 ticker,
             )
             if include_chart and selected_chart_type == "candlestick"
@@ -340,6 +341,7 @@ def build_quote_responses(
     include_chart: bool = False,
     model_profile: str | None = None,
     chart_type: str | None = None,
+    provider: str | None = None,
 ) -> QuoteBatchResponse:
     tickers = normalize_ticker_batch(raw_tickers)
     normalize_model_profile(model_profile)
@@ -354,6 +356,7 @@ def build_quote_responses(
                 include_chart=include_chart,
                 model_profile=model_profile,
                 chart_type=chart_type,
+                provider=provider,
             )
             for ticker in tickers
         ]

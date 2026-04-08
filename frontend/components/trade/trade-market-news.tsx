@@ -1,11 +1,20 @@
 "use client";
-
 import { useEffect, useState } from "react";
-import type { MarketNews } from "@/lib/mocks/stock-data";
+import type { MarketNews, MockQuote, NewsReport, RefreshCadence } from "@/lib/mocks/stock-data";
 import { fetchMarketNews } from "@/lib/stock-quote";
 
 const MARKET_NEWS_REFRESH_SECONDS = 300;
 const MARKET_NEWS_LIMIT = 8;
+const SIGNAL_LABELS = {
+  bullish: "Leaning buy",
+  bearish: "Leaning sell",
+  neutral: "Wait for now",
+} as const;
+const CADENCE_LABELS: Record<RefreshCadence, string> = {
+  "1m": "1 minute",
+  "5m": "5 minutes",
+  "15m": "15 minutes",
+} as const;
 
 function formatPublishedAt(value?: string | null) {
   if (!value) {
@@ -23,6 +32,75 @@ function formatPublishedAt(value?: string | null) {
     hour: "numeric",
     minute: "2-digit",
   }).format(publishedAt);
+}
+
+type TradeTickerNewsReportProps = {
+  quote: MockQuote;
+  newsReport: NewsReport | null;
+  newsReportLoading: boolean;
+  onRefresh: () => void;
+  isAdvancedView: boolean;
+  refreshCadence: RefreshCadence;
+};
+
+export function TradeTickerNewsReport({
+  quote,
+  newsReport,
+  newsReportLoading,
+  onRefresh,
+  isAdvancedView,
+  refreshCadence,
+}: TradeTickerNewsReportProps) {
+  const visibleNewsHeadlines =
+    newsReport?.newsHeadlines?.length
+      ? newsReport.newsHeadlines
+      : quote.newsHeadlines ?? [];
+
+  return (
+    <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/80 px-4 py-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+          Live news report
+        </p>
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs font-semibold text-slate-300 transition hover:border-slate-600 hover:bg-slate-800"
+          disabled={newsReportLoading}
+        >
+          {newsReportLoading ? "Refreshing..." : "Refresh now"}
+        </button>
+      </div>
+      <div className="mt-3 rounded-xl border border-slate-800 bg-slate-900/90 px-3 py-2">
+        <p className="text-sm font-semibold text-white">
+          {SIGNAL_LABELS[newsReport?.signal ?? quote.signal ?? "neutral"]} •{" "}
+          {(newsReport?.confidence ?? quote.confidence ?? 0).toFixed(1)}% confidence
+        </p>
+      </div>
+      <p className="mt-3 text-sm leading-6 text-slate-300">
+        {newsReport?.studentReasoning ?? newsReport?.report ?? "No news report yet."}
+      </p>
+      {visibleNewsHeadlines.length ? (
+        <div className="mt-3 space-y-2 text-sm leading-6 text-slate-300">
+          {visibleNewsHeadlines.map((headline) => (
+            <p key={headline}>{headline}</p>
+          ))}
+        </div>
+      ) : null}
+      {isAdvancedView ? (
+        <p className="mt-2 text-xs text-slate-500">
+          Updates every {CADENCE_LABELS[refreshCadence]} | Last refresh:{" "}
+          {newsReport ? new Date(newsReport.refreshedAt).toLocaleTimeString() : "-"} | Source:{" "}
+          {newsReport?.fromCache ? "cache" : "fresh"}
+          {newsReport?.reasoningSource ? ` | Reasoning: ${newsReport.reasoningSource}` : ""}
+        </p>
+      ) : (
+        <p className="mt-2 text-xs text-slate-500">
+          News summary refreshed in the background.
+        </p>
+      )}
+    </div>
+  );
 }
 
 export function TradeMarketNews() {

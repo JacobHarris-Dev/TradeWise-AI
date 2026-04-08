@@ -6,11 +6,15 @@ from importlib import import_module
 from threading import Lock
 from time import monotonic
 from contextlib import nullcontext
+from typing import Any
+
+import httpx
 
 
 DEFAULT_QWEN_MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 DEFAULT_REASONING_CACHE_SECONDS = 120
 DEFAULT_INVESTMENT_CHAT_MAX_NEW_TOKENS = 32
+DEFAULT_REMOTE_LLM_TIMEOUT_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -115,6 +119,78 @@ def _investment_chat_max_new_tokens() -> int:
 def _qwen_quantize_cpu_enabled() -> bool:
     raw = os.getenv("ML_QWEN_QUANTIZE_CPU", "true").strip().lower()
     return raw not in {"0", "false", "off", "no"}
+
+
+def _remote_llm_base_url() -> str:
+    return os.getenv("ML_QWEN_REMOTE_BASE_URL", "").strip()
+
+
+def _remote_llm_api_key() -> str:
+    return os.getenv("ML_QWEN_REMOTE_API_KEY", "").strip()
+
+
+def _remote_llm_model_name() -> str:
+    configured = os.getenv("ML_QWEN_REMOTE_MODEL", "").strip()
+    return configured or _qwen_model_name()
+
+
+def _remote_llm_timeout_seconds() -> float:
+    raw = os.getenv(
+        "ML_QWEN_REMOTE_TIMEOUT_SECONDS",
+        str(DEFAULT_REMOTE_LLM_TIMEOUT_SECONDS),
+    ).strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_REMOTE_LLM_TIMEOUT_SECONDS
+    return max(1.0, min(value, 300.0))
+
+
+def _remote_llm_enabled() -> bool:
+    return bool(_remote_llm_base_url())
+
+
+def _openai_chat_completion(
+    *,
+    prompt: str,
+    system_prompt: str,
+    max_new_tokens: int,
+) -> str:
+    base_url = _remote_llm_base_url().rstrip("/")
+    if not base_url:
+        raise RuntimeError("Remote LLM base URL is not configured.")
+
+    headers: dict[str, str] = {"content-type": "application/json"}
+    api_key = _remote_llm_api_key()
+    if api_key:
+        headers["authorization"] = f"Bearer {api_key}"
+
+    payload: dict[str, Any] = {
+        "model": _remote_llm_model_name(),
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0,
+        "max_tokens": max_new_tokens,
+    }
+
+    response = httpx.post(
+        f"{base_url}/v1/chat/completions",
+        json=payload,
+        headers=headers,
+        timeout=_remote_llm_timeout_seconds(),
+    )
+    response.raise_for_status()
+    data = response.json()
+    choices = data.get("choices") or []
+    if not choices:
+        raise RuntimeError("Remote LLM returned no choices.")
+    message = choices[0].get("message") or {}
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("Remote LLM returned an empty message.")
+    return content.strip()
 
 
 def _template_reasoning(
@@ -341,6 +417,29 @@ def build_investment_chat_reply(
     sector_text = ", ".join(sectors[:3]) if sectors else "no sector preference"
     ticker_text = ", ".join(tracked_tickers[:3]) if tracked_tickers else "none selected yet"
 
+    prompt_text = (
+        "You are TradeWise AI, a concise investing copilot for students. "
+        "Respond in exactly 2 short sentences. Avoid guarantees and hype. "
+        "Mention the selected 3 stocks once and briefly note risk.\n\n"
+        f"User goal: {clean_prompt}\n"
+        f"Risk profile: {model_profile}\n"
+        f"Sectors inferred: {sector_text}\n"
+        f"Selected stocks: {ticker_text}\n\n"
+        "Assistant reply:"
+    )
+
+    if _remote_llm_enabled():
+        try:
+            reply = _openai_chat_completion(
+                prompt=prompt_text,
+                system_prompt="You are TradeWise AI, a concise investing copilot for students.",
+                max_new_tokens=_investment_chat_max_new_tokens(),
+            )
+            if reply:
+                return ReasoningResult(text=reply, source="remote-llm")
+        except Exception:
+            pass
+
     if (
         not _use_qwen_enabled()
         or not _qwen_runtime_supported()
@@ -361,18 +460,7 @@ def build_investment_chat_reply(
 
     try:
         tokenizer, model = _load_qwen()
-        qwen_prompt = (
-            "You are TradeWise AI, a concise investing copilot for students. "
-            "Respond in exactly 2 short sentences. Avoid guarantees and hype. "
-            "Mention the selected 3 stocks once and briefly note risk.\n\n"
-            f"User goal: {clean_prompt}\n"
-            f"Risk profile: {model_profile}\n"
-            f"Sectors inferred: {sector_text}\n"
-            f"Selected stocks: {ticker_text}\n\n"
-            "Assistant reply:"
-        )
-
-        inputs = tokenizer(qwen_prompt, return_tensors="pt", truncation=True, max_length=2048)
+        inputs = tokenizer(prompt_text, return_tensors="pt", truncation=True, max_length=2048)
         with torch.no_grad() if torch is not None else nullcontext():
             output_ids = model.generate(
                 **inputs,
@@ -382,7 +470,7 @@ def build_investment_chat_reply(
             )
 
         generated = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-        reply = generated[len(qwen_prompt):].strip() if generated.startswith(qwen_prompt) else generated.strip()
+        reply = generated[len(prompt_text):].strip() if generated.startswith(prompt_text) else generated.strip()
         if reply:
             return ReasoningResult(text=reply, source="qwen")
     except Exception:
