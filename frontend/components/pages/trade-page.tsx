@@ -67,6 +67,7 @@ function InfoHint({ label: _label }: { label: string }) {
  */
 export function TradePage() {
   const [uiMode, setUiMode] = useState<TradeUiMode>("simple");
+  const [manualShares, setManualShares] = useState(1);
   const {
     trackedTickers,
     selectedTicker,
@@ -96,6 +97,9 @@ export function TradePage() {
     lastTickAt,
     clock,
     marketSnapshot,
+    simulationSnapshot,
+    advanceSimulationTime,
+    resetSimulationTime,
     setTradeMode,
     setModelProfile,
     setRefreshCadence,
@@ -158,6 +162,10 @@ export function TradePage() {
     : streamConnected
       ? "Connected"
       : "Connecting";
+  const selectedSimPrice =
+    selectedTicker && simulationSnapshot?.currentPrices[selectedTicker] != null
+      ? simulationSnapshot.currentPrices[selectedTicker]
+      : null;
 
   return (
     <div className="flex max-w-5xl flex-col gap-4">
@@ -412,17 +420,32 @@ export function TradePage() {
                   Use this mode if you want to compare your own call with the model before
                   risking real money.
                 </p>
+                <div className="mt-4">
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
+                    Shares
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={manualShares}
+                    onChange={(e) =>
+                      setManualShares(Math.max(1, Number(e.target.value) || 1))
+                    }
+                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                  />
+                </div>
                 <div className="mt-4 flex gap-3">
                   <button
                     type="button"
-                    onClick={() => simulateOrder("buy")}
+                    onClick={() => simulateOrder("buy", manualShares)}
                     className="flex-1 rounded-xl bg-emerald-600 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500"
                   >
                     Practice buy
                   </button>
                   <button
                     type="button"
-                    onClick={() => simulateOrder("sell")}
+                    onClick={() => simulateOrder("sell", manualShares)}
                     className="flex-1 rounded-xl border border-red-300 bg-white py-2.5 text-sm font-semibold text-red-700 hover:bg-red-50 dark:border-red-800 dark:bg-zinc-900 dark:text-red-400 dark:hover:bg-red-950/40"
                   >
                     Practice sell
@@ -689,6 +712,92 @@ export function TradePage() {
                   unoptimized
                   className="h-auto w-full rounded-xl"
                 />
+              </section>
+            ) : null}
+
+            {simulationSnapshot ? (
+              <section className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                    Simulation snapshot
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => advanceSimulationTime(-1)}
+                      className="rounded-lg border border-zinc-300 bg-white px-2.5 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+                    >
+                      -1 step
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => advanceSimulationTime(1)}
+                      className="rounded-lg border border-zinc-300 bg-white px-2.5 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+                    >
+                      +1 step
+                    </button>
+                    <button
+                      type="button"
+                      onClick={resetSimulationTime}
+                      className="rounded-lg border border-zinc-300 bg-white px-2.5 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+                    >
+                      Latest
+                    </button>
+                  </div>
+                </div>
+                <dl className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                  <div>
+                    <dt className="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      Simulation time
+                    </dt>
+                    <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                      {new Date(simulationSnapshot.time).toLocaleString()}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      Current price
+                    </dt>
+                    <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                      {selectedSimPrice == null ? "-" : `$${selectedSimPrice.toFixed(2)}`}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      Portfolio value
+                    </dt>
+                    <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                      ${simulationSnapshot.portfolioValue.toFixed(2)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      Cash
+                    </dt>
+                    <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
+                      ${simulationSnapshot.cash.toFixed(2)}
+                    </dd>
+                  </div>
+                </dl>
+                <div className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50/70 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/60">
+                  <p className="text-xs uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
+                    Positions
+                  </p>
+                  {simulationSnapshot.positions.length ? (
+                    <ul className="mt-2 space-y-1 text-sm text-zinc-700 dark:text-zinc-300">
+                      {simulationSnapshot.positions.map((position) => (
+                        <li key={position.symbol}>
+                          {position.symbol}: {position.shares} shares @ $
+                          {position.price.toFixed(2)} = ${position.value.toFixed(2)}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+                      No open positions yet.
+                    </p>
+                  )}
+                </div>
               </section>
             ) : null}
           </div>

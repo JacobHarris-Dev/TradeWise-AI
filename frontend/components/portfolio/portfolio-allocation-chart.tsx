@@ -22,11 +22,12 @@ function formatUsd(n: number) {
 }
 
 type PieDatum = { name: string; value: number; pct: number };
-type AllocationRow = { ticker: string; value: number; pct?: number };
+type AllocationRow = { ticker: string; value: number; pct?: number; shares?: number };
 type PortfolioAllocationChartProps = {
   positions?: AllocationRow[];
   title?: string;
   description?: string;
+  totalEquity?: number;
 };
 
 type TooltipProps = {
@@ -60,6 +61,7 @@ export function PortfolioAllocationChart({
   positions,
   title = "Allocation",
   description = "Hover a slice to see share of your portfolio",
+  totalEquity,
 }: PortfolioAllocationChartProps) {
   const demoPositions = useMemo(() => getPortfolioPositions(), []);
   const data: PieDatum[] = useMemo(
@@ -78,6 +80,14 @@ export function PortfolioAllocationChart({
   );
 
   const [active, setActive] = useState<number | undefined>(undefined);
+  const resolvedTotalEquity = useMemo(
+    () => totalEquity ?? data.reduce((sum, row) => sum + row.value, 0),
+    [data, totalEquity],
+  );
+  const sourceRows = useMemo(() => {
+    const source = positions ?? demoPositions;
+    return source.filter((row) => row.value > 0);
+  }, [demoPositions, positions]);
 
   return (
     <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
@@ -120,6 +130,16 @@ export function PortfolioAllocationChart({
                 <Tooltip content={<PieTooltip />} />
               </PieChart>
             </ResponsiveContainer>
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <div className="rounded-xl border border-zinc-200 bg-white/95 px-3 py-2 text-center shadow-sm">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                  Total equity
+                </p>
+                <p className="mt-1 text-sm font-semibold text-zinc-900">
+                  {formatUsd(resolvedTotalEquity)}
+                </p>
+              </div>
+            </div>
           </div>
 
           <ul className="mt-2 space-y-2 border-t border-zinc-100 pt-4">
@@ -137,10 +157,24 @@ export function PortfolioAllocationChart({
                   />
                   <span className="font-mono font-medium text-zinc-800">{d.name}</span>
                 </span>
-                <span className="text-zinc-600">{d.pct}%</span>
+                <span className="text-zinc-600">{d.pct}% • {formatUsd(d.value)}</span>
               </li>
             ))}
           </ul>
+
+          <div className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50/70 px-3 py-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+              Current holdings
+            </p>
+            <ul className="mt-2 space-y-1 text-sm text-zinc-700">
+              {sourceRows.map((row) => (
+                <li key={`${row.ticker}-holding`} className="flex items-center justify-between gap-2">
+                  <span className="font-mono">{row.ticker}{row.shares ? ` • ${row.shares} sh` : ""}</span>
+                  <span className="font-medium">{formatUsd(row.value)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
         </>
       ) : (
         <div className="mt-6 rounded-xl border border-dashed border-zinc-200 bg-zinc-50 px-4 py-6 text-sm text-zinc-500">

@@ -4,7 +4,10 @@ import dynamic from "next/dynamic";
 import { useMemo } from "react";
 import { AiDisclaimer } from "@/components/layout/ai-disclaimer";
 import { HoldingCard } from "@/components/portfolio/holding-card";
-import { usePortfolioWorkspace } from "@/components/providers/trade-workspace-provider";
+import {
+  usePortfolioWorkspace,
+  useTradeWorkspace,
+} from "@/components/providers/trade-workspace-provider";
 
 const PortfolioAllocationChart = dynamic(
   () =>
@@ -26,6 +29,7 @@ const PortfolioGrowthChart = dynamic(
  * Portfolio: live paper-account holdings linked to the Trade tab.
  */
 export function PortfolioPage() {
+  const { simulationSnapshot } = useTradeWorkspace();
   const {
     portfolio,
     portfolioLoading: loading,
@@ -33,19 +37,46 @@ export function PortfolioPage() {
     refreshPortfolio,
   } = usePortfolioWorkspace();
 
-  const positionRows = useMemo(
-    () => portfolio?.positions ?? [],
-    [portfolio],
-  );
+  const positionRows = useMemo(() => {
+    if (simulationSnapshot) {
+      return simulationSnapshot.positions.map((position) => ({
+        ticker: position.symbol,
+        shares: position.shares,
+        marketValue: position.value,
+      }));
+    }
+    return portfolio?.positions ?? [];
+  }, [portfolio, simulationSnapshot]);
+
+  const cashValue = simulationSnapshot?.cash ?? portfolio?.cash ?? 0;
+  const positionsValue =
+    simulationSnapshot
+      ? simulationSnapshot.portfolioValue - simulationSnapshot.cash
+      : portfolio?.positionsValue ?? 0;
+  const totalEquityValue =
+    simulationSnapshot?.portfolioValue ?? portfolio?.totalEquity ?? 0;
 
   const allocationRows = useMemo(() => {
+    if (simulationSnapshot) {
+      return [
+        ...(simulationSnapshot.cash > 0
+          ? [{ ticker: "Cash", value: simulationSnapshot.cash }]
+          : []),
+        ...simulationSnapshot.positions.map((position) => ({
+          ticker: position.symbol,
+          value: position.value,
+          shares: position.shares,
+        })),
+      ];
+    }
     if (!portfolio) {
       return [];
     }
 
-    const rows = positionRows.map((position) => ({
+    const rows: { ticker: string; value: number; shares?: number }[] = positionRows.map((position) => ({
       ticker: position.ticker,
       value: position.marketValue,
+      shares: position.shares,
     }));
 
     if (portfolio.cash > 0) {
@@ -56,7 +87,7 @@ export function PortfolioPage() {
     }
 
     return rows;
-  }, [portfolio, positionRows]);
+  }, [portfolio, positionRows, simulationSnapshot]);
 
   return (
     <div className="space-y-6">
@@ -73,19 +104,19 @@ export function PortfolioPage() {
         <article className="rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm">
           <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">Cash</p>
           <p className="mt-1 text-lg font-semibold text-zinc-900">
-            ${portfolio ? portfolio.cash.toFixed(2) : "0.00"}
+            ${cashValue.toFixed(2)}
           </p>
         </article>
         <article className="rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm">
           <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">Positions Value</p>
           <p className="mt-1 text-lg font-semibold text-zinc-900">
-            ${portfolio ? portfolio.positionsValue.toFixed(2) : "0.00"}
+            ${positionsValue.toFixed(2)}
           </p>
         </article>
         <article className="rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm">
           <p className="text-xs uppercase tracking-[0.16em] text-zinc-500">Total Equity</p>
           <p className="mt-1 text-lg font-semibold text-zinc-900">
-            ${portfolio ? portfolio.totalEquity.toFixed(2) : "0.00"}
+            ${totalEquityValue.toFixed(2)}
           </p>
         </article>
         <article className="rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm">
@@ -118,6 +149,7 @@ export function PortfolioPage() {
         <PortfolioAllocationChart
           positions={allocationRows}
           description="Cash and open positions in your paper account"
+          totalEquity={totalEquityValue}
         />
 
         <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
@@ -125,8 +157,8 @@ export function PortfolioPage() {
             <div>
               <h2 className="text-lg font-semibold text-zinc-900">Holdings</h2>
               <p className="mt-0.5 text-sm text-zinc-500">
-                {portfolio?.positions.length ?? 0} position
-                {(portfolio?.positions.length ?? 0) === 1 ? "" : "s"}
+                {positionRows.length} position
+                {positionRows.length === 1 ? "" : "s"}
               </p>
             </div>
             <button
