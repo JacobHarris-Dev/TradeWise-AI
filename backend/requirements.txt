@@ -7,7 +7,7 @@ QuantLib
 scikit-learn
 xgboost
 yfinance
-alpaca-py
+alpaca-py>=0.20.0
 websockets
 uvicorn[standard]
 pydantic
