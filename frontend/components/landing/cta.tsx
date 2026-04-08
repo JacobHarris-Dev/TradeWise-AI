@@ -14,7 +14,7 @@ export function LandingCTA() {
           Move from the homepage into the workspace.
         </h2>
         <p className="mx-auto mb-10 max-w-2xl text-lg font-medium text-slate-600 lg:text-xl">
-          Sign in to save watchlists, inspect the trade view, and run the
+          Sign in to save your trading workspace, inspect the Trade view, and run the
           paper-trading flow behind the redesigned public experience.
         </p>
         <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">

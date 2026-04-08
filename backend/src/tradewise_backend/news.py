@@ -73,6 +73,8 @@ TOPIC_KEYWORDS = {
 }
 
 DEFAULT_NEWS_REFRESH_SECONDS = 90
+DEFAULT_MARKET_NEWS_REFRESH_SECONDS = 300
+DEFAULT_MARKET_NEWS_SYMBOLS = ("SPY", "QQQ", "DIA")
 
 
 @dataclass(frozen=True)
@@ -106,8 +108,19 @@ class _CachedNewsContext:
     fetched_at: datetime
 
 
+@dataclass(frozen=True)
+class MarketNewsSnapshot:
+    articles: tuple[NewsArticle, ...]
+    context: NewsContext | None
+    fetched_at: datetime
+    from_cache: bool
+    refresh_seconds: int
+
+
 _NEWS_CONTEXT_CACHE: dict[str, _CachedNewsContext] = {}
 _NEWS_CONTEXT_CACHE_LOCK = Lock()
+_MARKET_NEWS_CACHE: dict[str, MarketNewsSnapshot] = {}
+_MARKET_NEWS_CACHE_LOCK = Lock()
 
 
 def _configured_news_refresh_seconds() -> int:
@@ -117,6 +130,32 @@ def _configured_news_refresh_seconds() -> int:
     except ValueError:
         return DEFAULT_NEWS_REFRESH_SECONDS
     return max(0, value)
+
+
+def _configured_market_news_refresh_seconds() -> int:
+    raw_value = os.getenv(
+        "ML_MARKET_NEWS_REFRESH_SECONDS",
+        str(DEFAULT_MARKET_NEWS_REFRESH_SECONDS),
+    ).strip()
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return DEFAULT_MARKET_NEWS_REFRESH_SECONDS
+    return max(0, value)
+
+
+def _configured_market_news_symbols() -> tuple[str, ...]:
+    raw_value = os.getenv(
+        "ML_MARKET_NEWS_SYMBOLS",
+        ",".join(DEFAULT_MARKET_NEWS_SYMBOLS),
+    ).strip()
+    symbols = [
+        validate_ticker(normalize_ticker(value))
+        for value in raw_value.split(",")
+        if value.strip()
+    ]
+    deduped = tuple(dict.fromkeys(symbols))
+    return deduped or DEFAULT_MARKET_NEWS_SYMBOLS
 
 
 def _coerce_datetime(value: object) -> datetime | None:
@@ -207,6 +246,31 @@ def fetch_recent_news(ticker: str, limit: int = 8) -> list[NewsArticle]:
                 published_at=published_at,
             )
         )
+
+    articles.sort(
+        key=lambda article: article.published_at or datetime.min.replace(tzinfo=UTC),
+        reverse=True,
+    )
+    return articles[:limit]
+
+
+def fetch_market_news(
+    *,
+    limit: int = 8,
+    symbols: tuple[str, ...] | None = None,
+) -> list[NewsArticle]:
+    selected_symbols = symbols or _configured_market_news_symbols()
+    target_per_symbol = max(4, limit)
+    articles: list[NewsArticle] = []
+    seen_titles: set[str] = set()
+
+    for symbol in selected_symbols:
+        for article in fetch_recent_news(symbol, limit=target_per_symbol):
+            normalized_title = article.title.strip().lower()
+            if not normalized_title or normalized_title in seen_titles:
+                continue
+            seen_titles.add(normalized_title)
+            articles.append(article)
 
     articles.sort(
         key=lambda article: article.published_at or datetime.min.replace(tzinfo=UTC),
@@ -316,6 +380,54 @@ def build_news_context_for_date(
         and window_start <= article.published_at.date() <= as_of_date
     ]
     return _build_news_context_from_articles(filtered)
+
+
+def build_market_news_snapshot(
+    *,
+    limit: int = 8,
+    refresh_seconds: int | None = None,
+    force_refresh: bool = False,
+) -> MarketNewsSnapshot:
+    selected_symbols = _configured_market_news_symbols()
+    cache_key = ",".join(selected_symbols)
+    resolved_refresh_seconds = (
+        _configured_market_news_refresh_seconds()
+        if refresh_seconds is None
+        else max(0, refresh_seconds)
+    )
+    now = datetime.now(tz=UTC)
+
+    with _MARKET_NEWS_CACHE_LOCK:
+        cached = _MARKET_NEWS_CACHE.get(cache_key)
+        if (
+            not force_refresh
+            and cached is not None
+            and resolved_refresh_seconds > 0
+            and (now - cached.fetched_at).total_seconds() < resolved_refresh_seconds
+        ):
+            return MarketNewsSnapshot(
+                articles=cached.articles[:limit],
+                context=cached.context,
+                fetched_at=cached.fetched_at,
+                from_cache=True,
+                refresh_seconds=resolved_refresh_seconds,
+            )
+
+    articles = tuple(fetch_market_news(limit=limit, symbols=selected_symbols))
+    context = _build_news_context_from_articles(list(articles))
+    fetched_at = datetime.now(tz=UTC)
+    snapshot = MarketNewsSnapshot(
+        articles=articles,
+        context=context,
+        fetched_at=fetched_at,
+        from_cache=False,
+        refresh_seconds=resolved_refresh_seconds,
+    )
+
+    with _MARKET_NEWS_CACHE_LOCK:
+        _MARKET_NEWS_CACHE[cache_key] = snapshot
+
+    return snapshot
 
 
 def _build_news_context_from_articles(articles: list[NewsArticle]) -> NewsContext | None:

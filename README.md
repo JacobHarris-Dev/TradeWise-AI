@@ -71,14 +71,33 @@ hf auth login
 python backend/training/download_hf_model.py
 ```
 
-The default model is `Qwen/Qwen2.5-1.5B-Instruct`.
+If you have a Hugging Face access token, you can pass it through the environment or the CLI:
+
+```bash
+export HF_TOKEN=your_token_here
+python backend/training/download_hf_model.py
+```
+
+For faster downloads on supported machines, enable HF transfer acceleration:
+
+```bash
+python backend/training/download_hf_model.py --enable-hf-transfer
+```
+
+That flag works best after installing the optional transfer helper:
+
+```bash
+python -m pip install hf_transfer
+```
+
+The default model is `Qwen/Qwen2.5-0.5B-Instruct`.
 
 Helpful options:
 
 ```bash
 python backend/training/download_hf_model.py --tokenizer-only
 python backend/training/download_hf_model.py --cache-dir .hf-cache
-python backend/training/download_hf_model.py --model-name Qwen/Qwen2.5-1.5B-Instruct --device-map cpu
+python backend/training/download_hf_model.py --model-name Qwen/Qwen2.5-0.5B-Instruct --device-map cpu
 ```
 
 If you want the model to load on an NVIDIA GPU instead of CPU, install the CUDA

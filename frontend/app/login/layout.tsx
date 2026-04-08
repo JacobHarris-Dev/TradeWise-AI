@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 
 export const metadata: Metadata = {
   title: "Sign in · TradeWise",
-  description: "Sign in to TradeWise to sync your watchlist and data",
+  description: "Sign in to TradeWise to save your trading workspace and paper account",
 };
 
 export default function LoginLayout({

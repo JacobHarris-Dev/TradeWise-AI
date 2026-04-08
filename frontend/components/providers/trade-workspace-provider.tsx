@@ -28,7 +28,7 @@ import {
   fetchNewsReport,
   fetchPaperAccount,
   fetchPaperAccountPerformance,
-  fetchStockQuote,
+  fetchStockQuotes,
 } from "@/lib/stock-quote";
 import {
   createSimulationFromQuotes,
@@ -496,23 +496,11 @@ export function TradeWorkspaceProvider({
       }
 
       try {
-        const results = await Promise.allSettled(
-          symbols.map((ticker) => fetchStockQuote(ticker, { modelProfile })),
+        const batch = await fetchStockQuotes(symbols, { modelProfile });
+        const nextQuotes: MockQuote[] = batch.results;
+        const failures = batch.errors.map(
+          (error) => `${error.ticker}: ${error.message}`,
         );
-        const nextQuotes: MockQuote[] = [];
-        const failures: string[] = [];
-
-        for (const [index, result] of results.entries()) {
-          if (result.status === "fulfilled") {
-            nextQuotes.push(result.value);
-          } else {
-            const reason =
-              result.reason instanceof Error
-                ? result.reason.message
-                : "Could not load quote.";
-            failures.push(`${symbols[index]}: ${reason}`);
-          }
-        }
 
         if (nextQuotes.length) {
           setQuotesByTicker((current) => {

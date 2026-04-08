@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "TradeWise",
-  description: "Smart trading intelligence — watchlist and insights",
+  description: "Smart trading intelligence for prompts, starter baskets, and paper trading",
   icons: {
     icon: [{ url: "/brand/tradewise-icon.png", type: "image/png" }],
     apple: "/brand/tradewise-icon.png",

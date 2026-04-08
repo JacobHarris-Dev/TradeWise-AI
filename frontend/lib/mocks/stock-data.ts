@@ -37,11 +37,6 @@ export type MockQuote = {
   newsHeadlines?: string[];
 };
 
-export type PriceSnapshot = Pick<
-  MockQuote,
-  "ticker" | "companyName" | "lastPrice" | "changePercent"
->;
-
 export type StockRecommendation = {
   ticker: string;
   companyName: string;
@@ -133,6 +128,24 @@ export type NewsReport = {
   newsSentiment?: "positive" | "negative" | "neutral" | null;
   newsTopics: string[];
   newsHeadlines: string[];
+};
+
+export type MarketNewsArticle = {
+  title: string;
+  publisher?: string | null;
+  link?: string | null;
+  publishedAt?: string | null;
+};
+
+export type MarketNews = {
+  summary?: string | null;
+  sentiment: "positive" | "negative" | "neutral";
+  topics: string[];
+  refreshedAt: string;
+  fromCache: boolean;
+  refreshSeconds: number;
+  articleCount: number;
+  articles: MarketNewsArticle[];
 };
 
 export type InvestmentChatResponse = {

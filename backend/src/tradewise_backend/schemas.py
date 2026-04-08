@@ -45,6 +45,34 @@ class PriceSnapshotResponse(BaseModel):
     changePercent: float
 
 
+class MarketNewsArticleResponse(BaseModel):
+    title: str
+    publisher: str | None = None
+    link: str | None = None
+    publishedAt: str | None = None
+
+
+class MarketNewsResponse(BaseModel):
+    summary: str | None = None
+    sentiment: NewsSentiment = "neutral"
+    topics: list[str] = Field(default_factory=list)
+    refreshedAt: str
+    fromCache: bool
+    refreshSeconds: int = Field(ge=0)
+    articleCount: int = Field(ge=0)
+    articles: list[MarketNewsArticleResponse] = Field(default_factory=list)
+
+
+class QuoteBatchError(BaseModel):
+    ticker: str
+    message: str
+
+
+class QuoteBatchResponse(BaseModel):
+    results: list[QuoteResponse] = Field(default_factory=list)
+    errors: list[QuoteBatchError] = Field(default_factory=list)
+
+
 class StockRecommendationResponse(BaseModel):
     ticker: str
     companyName: str
