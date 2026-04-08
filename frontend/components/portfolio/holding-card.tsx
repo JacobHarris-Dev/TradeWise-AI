@@ -14,18 +14,18 @@ export function HoldingCard({
   valueDisplay = "—",
 }: HoldingCardProps) {
   return (
-    <article className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm">
+    <article className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-800 bg-slate-900/90 px-4 py-3 shadow-lg shadow-slate-950/20">
       <div>
-        <p className="font-mono text-sm font-semibold text-zinc-900">
+        <p className="font-mono text-sm font-semibold text-white">
           {ticker}
         </p>
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-slate-500">
           {shares} share{shares === 1 ? "" : "s"}
         </p>
       </div>
       <div className="text-right">
-        <p className="text-xs text-zinc-500">Est. value</p>
-        <p className="text-sm font-medium text-zinc-800">
+        <p className="text-xs text-slate-500">Est. value</p>
+        <p className="text-sm font-medium text-slate-200">
           {valueDisplay}
         </p>
       </div>

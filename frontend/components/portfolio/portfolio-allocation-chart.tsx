@@ -38,10 +38,10 @@ function PieTooltip({ active, payload }: TooltipProps) {
   if (!active || !payload?.length) return null;
   const row = payload[0].payload;
   return (
-    <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-md">
-      <p className="font-semibold text-zinc-900">{row.name}</p>
-      <p className="text-zinc-600">{formatUsd(row.value)}</p>
-      <p className="text-emerald-600">{row.pct}% of portfolio</p>
+    <div className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm shadow-md">
+      <p className="font-semibold text-slate-100">{row.name}</p>
+      <p className="text-slate-400">{formatUsd(row.value)}</p>
+      <p className="text-emerald-400">{row.pct}% of portfolio</p>
     </div>
   );
 }
@@ -80,9 +80,9 @@ export function PortfolioAllocationChart({
   const [active, setActive] = useState<number | undefined>(undefined);
 
   return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-semibold text-zinc-900">{title}</h2>
-      <p className="mt-0.5 text-sm text-zinc-500">
+    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-sm">
+      <h2 className="text-lg font-semibold text-white">{title}</h2>
+      <p className="mt-0.5 text-sm text-slate-400">
         {description}
       </p>
 
@@ -122,7 +122,7 @@ export function PortfolioAllocationChart({
             </ResponsiveContainer>
           </div>
 
-          <ul className="mt-2 space-y-2 border-t border-zinc-100 pt-4">
+          <ul className="mt-2 space-y-2 border-t border-slate-800 pt-4">
             {data.map((d, i) => (
               <li
                 key={d.name}
@@ -135,15 +135,15 @@ export function PortfolioAllocationChart({
                     className="h-2.5 w-2.5 rounded-full"
                     style={{ backgroundColor: sliceColor(d.name, i) }}
                   />
-                  <span className="font-mono font-medium text-zinc-800">{d.name}</span>
+                  <span className="font-mono font-medium text-slate-200">{d.name}</span>
                 </span>
-                <span className="text-zinc-600">{d.pct}%</span>
+                <span className="text-slate-400">{d.pct}%</span>
               </li>
             ))}
           </ul>
         </>
       ) : (
-        <div className="mt-6 rounded-xl border border-dashed border-zinc-200 bg-zinc-50 px-4 py-6 text-sm text-zinc-500">
+        <div className="mt-6 rounded-xl border border-dashed border-slate-700 bg-slate-950/50 px-4 py-6 text-sm text-slate-500">
           No positions to chart yet.
         </div>
       )}

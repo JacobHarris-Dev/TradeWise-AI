@@ -148,20 +148,20 @@ export function TradeStarterSectors() {
   };
 
   return (
-    <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+    <section className="w-full rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-zinc-900">Starter sectors</h2>
-          <p className="mt-1 max-w-2xl text-sm text-zinc-600">
+          <h2 className="text-lg font-semibold text-white">Starter sectors</h2>
+          <p className="mt-1 max-w-2xl text-sm text-slate-400">
             Choose up to three sectors and preload this Trade workspace with a starter basket picked from the model-backed stock universe.
           </p>
         </div>
-        <div className="rounded-full border border-zinc-200 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500">
+        <div className="rounded-full border border-slate-700 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
           {preferredSectors.length}/{MAX_TRACKED_TICKERS} selected
         </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {SECTOR_OPTIONS.map((sector) => {
           const isSelected = preferredSectors.includes(sector);
           return (
@@ -169,10 +169,10 @@ export function TradeStarterSectors() {
               key={sector}
               type="button"
               onClick={() => toggleSector(sector)}
-              className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+              className={`w-full rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
                 isSelected
-                  ? "border-zinc-900 bg-zinc-900 text-white"
-                  : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                  ? "border-indigo-500 bg-indigo-600 text-white"
+                  : "border-slate-700 bg-slate-950 text-slate-300 hover:bg-slate-800"
               }`}
             >
               {sector}
@@ -181,22 +181,22 @@ export function TradeStarterSectors() {
         })}
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-3">
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
         <button
           type="button"
           onClick={() => void loadTradeWorkspace()}
           disabled={loading || !preferredSectors.length}
-          className="rounded-xl bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
+          className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-60 sm:w-fit"
         >
           {loading ? "Loading starter basket..." : "Load 3 starter stocks"}
         </button>
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-slate-500 sm:flex-1">
           This updates the tracked basket on the current page.
         </p>
       </div>
 
       {error ? (
-        <p className="mt-3 text-sm text-red-600">{error}</p>
+        <p className="mt-3 text-sm text-rose-400">{error}</p>
       ) : null}
     </section>
   );
