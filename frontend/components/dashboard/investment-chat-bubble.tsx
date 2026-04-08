@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, type KeyboardEvent, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
@@ -12,6 +12,7 @@ import {
   fetchInvestmentChatResponse,
   fetchNewsReport,
   fetchPaperAccount,
+  fetchStockQuote,
   fetchStockQuotes,
   fetchStockRecommendations,
 } from "@/lib/stock-quote";
@@ -49,6 +50,29 @@ const RISK_KEYWORDS: Array<{ profile: ModelProfile; words: string[] }> = [
   { profile: "risky", words: ["aggressive", "high risk", "growth", "momentum"] },
 ];
 
+const FALLBACK_SECTORS = ["Technology", "Healthcare", "ETF"] as const;
+
+const SIGNAL_BADGES = {
+  bullish:
+    "bg-emerald-500/15 text-emerald-300 ring-1 ring-inset ring-emerald-500/30",
+  bearish: "bg-rose-500/15 text-rose-300 ring-1 ring-inset ring-rose-500/30",
+  neutral: "bg-slate-800/90 text-slate-300 ring-1 ring-inset ring-slate-700",
+} as const;
+
+const SIGNAL_LABELS = {
+  bullish: "Leaning buy",
+  bearish: "Leaning sell",
+  neutral: "Wait for now",
+} as const;
+
+type SelectedStockFocus = {
+  ticker: string;
+  companyName: string;
+  reason: string;
+  signal: MockQuote["signal"];
+  confidence: number | null;
+};
+
 function parsePrompt(prompt: string) {
   const lower = prompt.toLowerCase();
   const mentionedSectors = Object.entries(SECTOR_KEYWORDS)
@@ -60,12 +84,20 @@ function parsePrompt(prompt: string) {
     RISK_KEYWORDS.find((item) => item.words.some((word) => lower.includes(word)))
       ?.profile ?? "neutral";
 
+  const explicitTickerCandidates = prompt.match(/\$[A-Za-z]{1,5}\b|\b[A-Z]{1,5}\b/g) ?? [];
   const explicitTickers = Array.from(
     new Set(
-      prompt
-        .toUpperCase()
-        .match(/\b[A-Z]{1,5}\b/g)
-        ?.filter((value) => !["AI", "ETF", "USD", "I", "ME"].includes(value)) ?? [],
+      explicitTickerCandidates
+        .map((value) => value.replace(/^\$/, "").trim().toUpperCase())
+        .filter((value) => {
+          if (!value) {
+            return false;
+          }
+          if (["AI", "ETF", "USD", "I", "ME"].includes(value)) {
+            return false;
+          }
+          return value === value.toUpperCase();
+        }),
     ),
   ).slice(0, MAX_TRACKED_TICKERS);
 
@@ -79,6 +111,134 @@ function parsePrompt(prompt: string) {
 function scoreQuote(quote: MockQuote) {
   const signalBonus = quote.signal === "bullish" ? 2 : quote.signal === "neutral" ? 1 : 0;
   return signalBonus + (quote.confidence ?? 0);
+}
+
+function buildQuoteReason(quote: MockQuote) {
+  const explanation = quote.explanation?.trim();
+  if (explanation) {
+    return explanation;
+  }
+
+  const signalLabel =
+    quote.signal === "bullish"
+      ? "The model leans bullish"
+      : quote.signal === "bearish"
+        ? "The model leans bearish"
+        : "The model leans neutral";
+  const confidenceLabel =
+    typeof quote.confidence === "number"
+      ? `${quote.confidence.toFixed(1)}% confidence`
+      : "with model confidence attached";
+
+  return `${signalLabel} ${confidenceLabel}.`;
+}
+
+async function resolveThreeStockBasket(params: {
+  promptSectors: string[];
+  explicitTickers: string[];
+  modelProfile: ModelProfile;
+}) {
+  const candidateSet = new Set<string>(
+    params.explicitTickers.map((ticker) => ticker.trim().toUpperCase()).filter(Boolean),
+  );
+
+  const sectorSets = [params.promptSectors, [...FALLBACK_SECTORS]];
+  for (const sectors of sectorSets) {
+    if (candidateSet.size >= MAX_TRACKED_TICKERS) {
+      break;
+    }
+
+    try {
+      const recommendations = await fetchStockRecommendations(sectors, { count: 5 });
+      for (const item of recommendations) {
+        candidateSet.add(item.ticker.trim().toUpperCase());
+        if (candidateSet.size >= 5) {
+          break;
+        }
+      }
+    } catch {
+      // Try the next fallback sector set if one recommendation request fails.
+    }
+  }
+
+  const initialCandidates = Array.from(candidateSet);
+  if (!initialCandidates.length) {
+    throw new Error("I could not find candidate stocks from that prompt.");
+  }
+
+  const quoteMap = new Map<string, MockQuote>();
+  try {
+    const batch = await fetchStockQuotes(initialCandidates, {
+      includeChart: false,
+      modelProfile: params.modelProfile,
+    });
+
+    for (const quote of batch.results) {
+      quoteMap.set(quote.ticker, quote);
+    }
+  } catch {
+    // Fall through to individual quote fetches for better resilience.
+  }
+
+  const missingCandidates = initialCandidates.filter((ticker) => !quoteMap.has(ticker));
+  if (quoteMap.size < MAX_TRACKED_TICKERS && missingCandidates.length) {
+    const fallbackFetches = await Promise.allSettled(
+      missingCandidates.map((ticker) =>
+        fetchStockQuote(ticker, {
+          includeChart: false,
+          modelProfile: params.modelProfile,
+        }),
+      ),
+    );
+
+    for (const result of fallbackFetches) {
+      if (result.status === "fulfilled") {
+        quoteMap.set(result.value.ticker, result.value);
+      }
+    }
+  }
+
+  if (quoteMap.size < MAX_TRACKED_TICKERS) {
+    let fallbackTickers: string[] = [];
+    try {
+      const fallbackRecommendations = await fetchStockRecommendations(
+        [...FALLBACK_SECTORS],
+        { count: MAX_TRACKED_TICKERS },
+      );
+      fallbackTickers = fallbackRecommendations
+        .map((item) => item.ticker.trim().toUpperCase())
+        .filter((ticker) => ticker && !quoteMap.has(ticker));
+    } catch {
+      fallbackTickers = [];
+    }
+
+    if (fallbackTickers.length) {
+      const fallbackQuotes = await Promise.allSettled(
+        fallbackTickers.map((ticker) =>
+          fetchStockQuote(ticker, {
+            includeChart: false,
+            modelProfile: params.modelProfile,
+          }),
+        ),
+      );
+
+      for (const result of fallbackQuotes) {
+        if (result.status === "fulfilled") {
+          quoteMap.set(result.value.ticker, result.value);
+        }
+      }
+    }
+  }
+
+  const selectedQuotes = Array.from(quoteMap.values())
+    .sort((a, b) => scoreQuote(b) - scoreQuote(a))
+    .slice(0, MAX_TRACKED_TICKERS);
+
+  if (selectedQuotes.length < MAX_TRACKED_TICKERS) {
+    throw new Error("Could not load three stock picks right now.");
+  }
+
+  return selectedQuotes;
 }
 
 export function InvestmentChatBubble({
@@ -97,22 +257,23 @@ export function InvestmentChatBubble({
     {
       role: "assistant",
       text:
-        "Tell me what you want to invest in, and I will pick + track 3 stocks using our model.",
+        "Tell me what you want to invest in, and I will pick and track 3 stocks using our model.",
     },
   ]);
+  const [selectedStocks, setSelectedStocks] = useState<SelectedStockFocus[]>([]);
 
   const canSubmit = useMemo(() => prompt.trim().length > 2 && !loading, [loading, prompt]);
 
-  const handleSubmit = async (event: FormEvent) => {
-    event.preventDefault();
+  const submitPrompt = async () => {
     const rawPrompt = prompt.trim();
-    if (!rawPrompt) {
+    if (!rawPrompt || loading) {
       return;
     }
 
     setPrompt("");
     setError(null);
     setLoading(true);
+    setSelectedStocks([]);
     setMessages((current) => [...current, { role: "user", text: rawPrompt }]);
 
     try {
@@ -120,36 +281,11 @@ export function InvestmentChatBubble({
       setModelProfile(parsed.modelProfile);
       writeStoredString(TRADE_STORAGE_KEYS.modelProfile, parsed.modelProfile);
 
-      const tickerSet = new Set(parsed.explicitTickers);
-      if (tickerSet.size < MAX_TRACKED_TICKERS) {
-        const recommendations = await fetchStockRecommendations(parsed.sectors, {
-          count: 5,
-        });
-        for (const item of recommendations) {
-          tickerSet.add(item.ticker.trim().toUpperCase());
-          if (tickerSet.size >= 5) {
-            break;
-          }
-        }
-      }
-
-      const candidateTickers = Array.from(tickerSet);
-      if (!candidateTickers.length) {
-        throw new Error("I could not find candidate stocks from that prompt.");
-      }
-
-      const quoteBatch = await fetchStockQuotes(candidateTickers, {
-        includeChart: false,
+      const rankedQuotes = await resolveThreeStockBasket({
+        promptSectors: parsed.sectors,
+        explicitTickers: parsed.explicitTickers,
         modelProfile: parsed.modelProfile,
       });
-
-      const rankedQuotes = quoteBatch.results
-        .sort((a, b) => scoreQuote(b) - scoreQuote(a))
-        .slice(0, MAX_TRACKED_TICKERS);
-
-      if (!rankedQuotes.length) {
-        throw new Error("Could not score candidate stocks right now.");
-      }
 
       const trackedTickers = rankedQuotes.map((quote) => quote.ticker);
       const selectedTicker = trackedTickers[0] ?? "";
@@ -173,6 +309,16 @@ export function InvestmentChatBubble({
         newsReportsByTicker[newsResult.value.ticker] = newsResult.value;
       }
 
+      setSelectedStocks(
+        rankedQuotes.map((quote) => ({
+          ticker: quote.ticker,
+          companyName: quote.companyName,
+          reason: buildQuoteReason(quote),
+          signal: quote.signal,
+          confidence: quote.confidence ?? null,
+        })),
+      );
+
       writeStoredJson(TRADE_STORAGE_KEYS.preferredSectors, parsed.sectors);
       writeStoredJson(TRADE_STORAGE_KEYS.trackedTickers, trackedTickers);
 
@@ -185,7 +331,7 @@ export function InvestmentChatBubble({
         paperAccount:
           paperAccountResult.status === "fulfilled" ? paperAccountResult.value : null,
         autoTradeResult: null,
-        lastAction: `AI prompt loaded ${trackedTickers.join(", ")} based on: "${rawPrompt}"`,
+        lastAction: `AI selected ${trackedTickers.join(", ")} from: "${rawPrompt}"`,
       });
 
       const generated = await fetchInvestmentChatResponse({
@@ -209,6 +355,24 @@ export function InvestmentChatBubble({
     } finally {
       setLoading(false);
     }
+  };
+
+  const handlePromptKeyDown = (
+    event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>,
+  ) => {
+    if (event.key !== "Enter" || event.shiftKey) {
+      return;
+    }
+
+    event.preventDefault();
+    if (canSubmit) {
+      void submitPrompt();
+    }
+  };
+
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    void submitPrompt();
   };
 
   return (
@@ -264,6 +428,7 @@ export function InvestmentChatBubble({
           <textarea
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
+            onKeyDown={handlePromptKeyDown}
             placeholder="Example: I want safer healthcare and tech names I can track this week without taking too much risk."
             className="min-h-28 w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm leading-6 text-white outline-none ring-indigo-400 focus:ring-2"
             disabled={loading}
@@ -272,6 +437,7 @@ export function InvestmentChatBubble({
           <input
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
+            onKeyDown={handlePromptKeyDown}
             placeholder="Example: I want safe tech + healthcare picks this week"
             className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none ring-indigo-400 focus:ring-2"
             disabled={loading}
@@ -296,6 +462,64 @@ export function InvestmentChatBubble({
       </form>
 
       {error ? <p className="mt-3 text-sm text-rose-400">{error}</p> : null}
+
+      {selectedStocks.length ? (
+        <section className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h4 className="text-sm font-semibold text-white">Why these 3</h4>
+              <p className="mt-1 text-xs text-slate-400">
+                The model-backed basket is always topped up to three names, and each pick gets its own rationale.
+              </p>
+            </div>
+            <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-300">
+              3 picks
+            </span>
+          </div>
+
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            {selectedStocks.map((stock, index) => (
+              <article
+                key={stock.ticker}
+                className="rounded-2xl border border-slate-800 bg-slate-900/80 p-3"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                      Pick {index + 1}
+                    </p>
+                    <h5 className="mt-1 font-mono text-base font-semibold text-white">
+                      {stock.ticker}
+                    </h5>
+                    <p className="text-xs text-slate-400">{stock.companyName}</p>
+                  </div>
+                  {stock.signal ? (
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
+                        stock.signal === "bullish"
+                          ? SIGNAL_BADGES.bullish
+                          : stock.signal === "bearish"
+                            ? SIGNAL_BADGES.bearish
+                            : SIGNAL_BADGES.neutral
+                      }`}
+                    >
+                      {SIGNAL_LABELS[stock.signal]}
+                    </span>
+                  ) : null}
+                </div>
+                <p className="mt-3 text-sm leading-6 text-slate-300">
+                  {stock.reason}
+                </p>
+                {typeof stock.confidence === "number" ? (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Confidence: {stock.confidence.toFixed(1)}%
+                  </p>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </section>
   );
 }

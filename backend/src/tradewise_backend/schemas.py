@@ -112,7 +112,7 @@ class InvestmentChatRequest(BaseModel):
 
 class InvestmentChatResponse(BaseModel):
     reply: str
-    source: Literal["qwen", "template"] = "template"
+    source: Literal["qwen", "template", "remote-llm"] = "template"
 
 
 class AnalyzeRequest(BaseModel):

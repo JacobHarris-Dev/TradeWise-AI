@@ -13,7 +13,7 @@ import httpx
 
 DEFAULT_QWEN_MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 DEFAULT_REASONING_CACHE_SECONDS = 120
-DEFAULT_INVESTMENT_CHAT_MAX_NEW_TOKENS = 32
+DEFAULT_INVESTMENT_CHAT_MAX_NEW_TOKENS = 96
 DEFAULT_REMOTE_LLM_TIMEOUT_SECONDS = 60.0
 
 
@@ -416,15 +416,34 @@ def build_investment_chat_reply(
 
     sector_text = ", ".join(sectors[:3]) if sectors else "no sector preference"
     ticker_text = ", ".join(tracked_tickers[:3]) if tracked_tickers else "none selected yet"
+    selected_tickers = [ticker.strip() for ticker in tracked_tickers[:3] if ticker.strip()]
+    selected_text = ", ".join(selected_tickers) if selected_tickers else ticker_text
+    rationale_text = (
+        f"{selected_tickers[0]} anchors the basket."
+        if len(selected_tickers) == 1
+        else (
+            f"{selected_tickers[0]} anchors the basket, {selected_tickers[1]} adds balance."
+            if len(selected_tickers) == 2
+            else (
+                f"{selected_tickers[0]} anchors the basket, {selected_tickers[1]} adds balance, "
+                f"and {selected_tickers[2]} gives you a different angle."
+                if len(selected_tickers) >= 3
+                else "The basket stays aligned with your sectors."
+            )
+        )
+    )
 
     prompt_text = (
         "You are TradeWise AI, a concise investing copilot for students. "
-        "Respond in exactly 2 short sentences. Avoid guarantees and hype. "
-        "Mention the selected 3 stocks once and briefly note risk.\n\n"
+        "Respond in exactly 4 short sentences. Avoid guarantees and hype. "
+        "Use one sentence to name the 3 selected stocks and explain the overall theme. "
+        "Use one sentence per stock to give a concrete reason for each pick based on sector fit, momentum, quality, or diversification. "
+        "End with a short risk sentence.\n\n"
         f"User goal: {clean_prompt}\n"
         f"Risk profile: {model_profile}\n"
         f"Sectors inferred: {sector_text}\n"
-        f"Selected stocks: {ticker_text}\n\n"
+        f"Selected stocks: {selected_text}\n"
+        f"Selection rationale: {rationale_text}\n\n"
         "Assistant reply:"
     )
 
@@ -447,8 +466,8 @@ def build_investment_chat_reply(
     ):
         return ReasoningResult(
             text=(
-                f"I mapped your goal to a {model_profile} profile and selected: {ticker_text}. "
-                f"Focus sectors: {sector_text}. I can now track these 3 and explain each signal."
+                f"I mapped your goal to a {model_profile} profile and selected {selected_text}. "
+                f"{rationale_text} While staying focused on {sector_text}."
             ),
             source="template",
         )
@@ -478,8 +497,8 @@ def build_investment_chat_reply(
 
     return ReasoningResult(
         text=(
-            f"I mapped your goal to a {model_profile} profile and selected: {ticker_text}. "
-            f"Focus sectors: {sector_text}. I can now track these 3 and explain each signal."
+            f"I mapped your goal to a {model_profile} profile and selected {selected_text}. "
+            f"{rationale_text} While staying focused on {sector_text}."
         ),
         source="template",
     )

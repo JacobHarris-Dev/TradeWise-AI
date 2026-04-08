@@ -98,6 +98,7 @@ export function TradePage() {
     lastTickAt,
     clock,
     marketSnapshot,
+    simulation,
     simulationSnapshot,
     advanceSimulationTime,
     resetSimulationTime,
@@ -137,6 +138,10 @@ export function TradePage() {
   }).format(clock);
   const quote = selectedTicker ? quotesByTicker[selectedTicker] ?? null : null;
   const newsReport = selectedTicker ? newsReportsByTicker[selectedTicker] ?? null : null;
+  const selectedSimPriceSymbol = selectedTicker || quote?.ticker || trackedTickers[0] || "";
+  const selectedSimPrice = simulationSnapshot
+    ? simulationSnapshot.currentPrices[selectedSimPriceSymbol] ?? null
+    : null;
   const activeProfile = quote?.selectedModelProfile ?? modelProfile;
   const currentSymbol = quote?.ticker || selectedTicker || trackedTickers[0] || "AAPL";
   const trackedTickerSummary = trackedTickers.length
@@ -168,6 +173,24 @@ export function TradePage() {
       { total: 0, buys: 0, sells: 0, holds: 0 },
     );
   }, [paperTradeLog]);
+
+  const simulationTimeline = useMemo(
+    () => simulation?.priceTimelineBySymbol[selectedSimPriceSymbol] ?? [],
+    [selectedSimPriceSymbol, simulation],
+  );
+
+  const simulationMarkers = useMemo(
+    () =>
+      (simulation?.trades ?? [])
+        .filter((trade) => trade.symbol === selectedSimPriceSymbol)
+        .map((trade) => ({
+          time: trade.timestamp,
+          price: trade.price,
+          label: `${trade.type === "buy" ? "Buy" : "Sell"} ${trade.shares}`,
+          kind: trade.type,
+        })),
+    [selectedSimPriceSymbol, simulation],
+  );
 
   return (
     <div className="flex max-w-6xl flex-col gap-4 text-slate-100">
@@ -808,6 +831,16 @@ export function TradePage() {
                     </dd>
                   </div>
                 </dl>
+                <div className="mt-4">
+                  <LiveLineChart
+                    points={simulationTimeline}
+                    ticker={selectedSimPriceSymbol}
+                    title="Simulation timeline"
+                    subtitle="The dashed cursor shows the exact replay moment for the selected stock."
+                    currentTime={simulationSnapshot.time}
+                    markers={simulationMarkers}
+                  />
+                </div>
                 <div className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50/70 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/60">
                   <p className="text-xs uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
                     Positions

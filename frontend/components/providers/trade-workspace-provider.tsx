@@ -251,6 +251,11 @@ export function TradeWorkspaceProvider({
   const [lastTickAt, setLastTickAt] = useState<string | null>(null);
   const [clock, setClock] = useState(() => new Date());
   const [watchSyncTick, setWatchSyncTick] = useState(0);
+  const [simulation, setSimulation] = useState<TradingSimulation | null>(null);
+  const [persistedTradingState, setPersistedTradingState] =
+    useState<PersistedTradingState | null>(null);
+  const [hasHydratedPersistedState, setHasHydratedPersistedState] =
+    useState(false);
   const skipInitialQuotesRefreshRef = useRef(false);
   const skipInitialPaperAccountRefreshRef = useRef(false);
   const skipInitialNewsRefreshRef = useRef(false);

@@ -37,7 +37,7 @@ ML_BACKEND_URL=http://192.168.1.50:8000
 # backend/.env
 ML_QWEN_REMOTE_BASE_URL=http://192.168.1.77:8001
 ML_QWEN_REMOTE_API_KEY=your-key-if-needed
-ML_QWEN_REMOTE_MODEL=Qwen/Qwen2.5-0.5B-Instruct
+ML_QWEN_REMOTE_MODEL=qwen2.5:7b
 ```
 
 The backend will use the remote desktop model for chat when `ML_QWEN_REMOTE_BASE_URL`
@@ -128,7 +128,7 @@ That flag works best after installing the optional transfer helper:
 python -m pip install hf_transfer
 ```
 
-The default model is `Qwen/Qwen2.5-0.5B-Instruct`.
+The default remote desktop model in the current setup is `qwen2.5:7b`.
 
 Helpful options:
 
