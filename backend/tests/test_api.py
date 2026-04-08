@@ -11,7 +11,12 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from tradewise_backend.main import app
-from tradewise_backend.news import NewsContext, NewsContextSnapshot
+from tradewise_backend.news import (
+    MarketNewsSnapshot,
+    NewsArticle,
+    NewsContext,
+    NewsContextSnapshot,
+)
 from tradewise_backend.schemas import (
     AutoTradeBatchResponse,
     AutoTradeResponse,
@@ -21,7 +26,7 @@ from tradewise_backend.schemas import (
     PaperAccountPerformanceResponse,
     PaperAccountPerformancePoint,
     PaperAccountPerformancePosition,
-    PriceSnapshotResponse,
+    QuoteBatchResponse,
     QuoteResponse,
     TechnicalSnapshot,
 )
@@ -120,16 +125,35 @@ def sample_auto_trade_response() -> AutoTradeResponse:
     )
 
 
+def sample_quote_response() -> QuoteResponse:
+    return sample_auto_trade_response().quote
+
+
 def sample_auto_trade_batch_response() -> AutoTradeBatchResponse:
     return AutoTradeBatchResponse(results=[sample_auto_trade_response()])
 
 
-def sample_price_snapshot() -> PriceSnapshotResponse:
-    return PriceSnapshotResponse(
-        ticker="AAPL",
-        companyName="Apple Inc.",
-        lastPrice=188.42,
-        changePercent=0.52,
+def sample_market_news_snapshot() -> MarketNewsSnapshot:
+    fetched_at = datetime(2026, 4, 7, 10, 0, tzinfo=UTC)
+    return MarketNewsSnapshot(
+        articles=(
+            NewsArticle(
+                title="Stocks rise as traders weigh fresh inflation data",
+                publisher="Yahoo Finance",
+                link="https://finance.yahoo.com/example-story",
+                published_at=fetched_at,
+            ),
+        ),
+        context=NewsContext(
+            summary="Markets are leaning higher as traders digest macro data and large-cap momentum.",
+            sentiment="positive",
+            topics=("macro", "ai"),
+            headlines=("Stocks rise as traders weigh fresh inflation data",),
+            article_count=1,
+        ),
+        fetched_at=fetched_at,
+        from_cache=False,
+        refresh_seconds=300,
     )
 
 
@@ -217,6 +241,26 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(body["newsSentiment"], "positive")
         self.assertEqual(body["newsTopics"], ["ai", "products"])
 
+    def test_quotes_contract(self) -> None:
+        with patch(
+            "tradewise_backend.main.build_quote_responses",
+            return_value=QuoteBatchResponse(results=[sample_quote_response()], errors=[]),
+        ):
+            response = self.client.get(
+                "/v1/quotes",
+                params={
+                    "tickers": "AAPL,NVDA",
+                    "includeChart": "false",
+                    "modelProfile": "neutral",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(len(body["results"]), 1)
+        self.assertEqual(body["results"][0]["ticker"], "NVDA")
+        self.assertEqual(body["errors"], [])
+
     def test_investment_chat_returns_template_fallback(self) -> None:
         with patch(
             "tradewise_backend.main.build_investment_chat_reply",
@@ -232,7 +276,7 @@ class ApiTestCase(unittest.TestCase):
             response = self.client.post(
                 "/v1/investment-chat",
                 json={
-                    "prompt": "Help me build a tech watchlist.",
+                    "prompt": "Help me build a tech basket.",
                     "modelProfile": "neutral",
                     "sectors": ["technology"],
                     "trackedTickers": ["AAPL", "MSFT", "NVDA"],
@@ -247,20 +291,21 @@ class ApiTestCase(unittest.TestCase):
         )
         self.assertEqual(body["source"], "template")
 
-    def test_price_snapshots_contract(self) -> None:
+    def test_market_news_contract(self) -> None:
         with patch(
-            "tradewise_backend.main.build_price_snapshots",
-            return_value=[sample_price_snapshot()],
+            "tradewise_backend.main.build_market_news_snapshot",
+            return_value=sample_market_news_snapshot(),
         ):
             response = self.client.get(
-                "/v1/price-snapshots",
-                params={"tickers": "AAPL,NVDA"},
+                "/v1/market-news",
+                params={"limit": "8", "refreshSeconds": "300"},
             )
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(len(body), 1)
-        self.assertEqual(body[0]["ticker"], "AAPL")
-        self.assertIn("lastPrice", body[0])
+        self.assertEqual(body["articleCount"], 1)
+        self.assertEqual(body["sentiment"], "positive")
+        self.assertEqual(body["topics"], ["macro", "ai"])
+        self.assertEqual(body["articles"][0]["publisher"], "Yahoo Finance")
 
     def test_stock_recommendations_contract(self) -> None:
         with patch(

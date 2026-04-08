@@ -17,7 +17,7 @@ export function PublicLandingPage() {
     router.replace("/dashboard");
   }, [loading, router, user]);
 
-  if (loading || user) {
+  if (user) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-white">
         <div className="animate-pulse">
@@ -25,6 +25,10 @@ export function PublicLandingPage() {
         </div>
       </div>
     );
+  }
+
+  if (loading) {
+    return <LandingHomepage />;
   }
 
   return <LandingHomepage />;

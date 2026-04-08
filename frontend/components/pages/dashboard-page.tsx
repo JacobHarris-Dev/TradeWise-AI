@@ -1,14 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useAuth } from "@/components/providers/auth-provider";
-import { InvestmentChatBubble } from "@/components/dashboard/investment-chat-bubble";
-import { MarketOverview } from "@/components/dashboard/market-overview";
-import { TradeStarterSectors } from "@/components/dashboard/trade-starter-sectors";
-import { Watchlist } from "@/components/watchlist/watchlist";
 
-/**
- * Dashboard route: personalized greeting, watchlist (Firestore when signed in), market strip.
- */
 export function DashboardPage() {
   const { user, loading } = useAuth();
 
@@ -29,15 +23,41 @@ export function DashboardPage() {
           {welcomeLine}
         </h1>
         <p className="mt-1 text-sm text-zinc-600">
-          Track symbols, scan the market snapshot, and use Trade or Portfolio for
-          the next steps.
+          Trade now carries the AI prompt, starter sectors, and live market news in one place. Portfolio stays focused on paper performance.
         </p>
-        <InvestmentChatBubble />
       </section>
 
-      <TradeStarterSectors />
-      <Watchlist />
-      <MarketOverview />
+      <section className="grid gap-4 lg:grid-cols-2">
+        <Link
+          href="/trade"
+          className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50"
+        >
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
+            Trade
+          </p>
+          <h2 className="mt-2 text-lg font-semibold text-zinc-900">
+            Open the trading workspace
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-zinc-600">
+            Ask the TradeWise AI Prompt for a basket, load starter sectors, and read the latest market headlines from one screen.
+          </p>
+        </Link>
+
+        <Link
+          href="/portfolio"
+          className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50"
+        >
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
+            Portfolio
+          </p>
+          <h2 className="mt-2 text-lg font-semibold text-zinc-900">
+            Review paper performance
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-zinc-600">
+            Track equity, open positions, and recent paper-trading results without the old dashboard widgets in the way.
+          </p>
+        </Link>
+      </section>
     </div>
   );
 }

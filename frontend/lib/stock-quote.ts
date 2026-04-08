@@ -1,11 +1,11 @@
 import type {
   AutoTradeBatchResult,
   AutoTradeResult,
-  NewsReport,
   InvestmentChatResponse,
+  MarketNews,
+  NewsReport,
   PaperAccount,
   PaperAccountPerformance,
-  PriceSnapshot,
   RefreshCadence,
   MockQuote,
   MockTradingDay,
@@ -56,7 +56,10 @@ export async function fetchStockQuotes(
     includeChart?: boolean;
     modelProfile?: ModelProfile;
   } = {},
-): Promise<MockQuote[]> {
+): Promise<{
+  results: MockQuote[];
+  errors: Array<{ ticker: string; message: string }>;
+}> {
   const normalizedTickers = Array.from(
     new Set(
       tickers.map((ticker) => ticker.trim().toUpperCase()).filter(Boolean),
@@ -64,17 +67,30 @@ export async function fetchStockQuotes(
   );
 
   if (normalizedTickers.length === 0) {
-    return [];
+    return { results: [], errors: [] };
   }
 
-  return Promise.all(
-    normalizedTickers.map((ticker) =>
-      fetchStockQuote(ticker, {
-        includeChart: options.includeChart,
-        modelProfile: options.modelProfile,
-      }),
-    ),
-  );
+  const params = new URLSearchParams({
+    tickers: normalizedTickers.join(","),
+    includeChart: options.includeChart === true ? "true" : "false",
+  });
+  if (options.modelProfile) {
+    params.set("modelProfile", options.modelProfile);
+  }
+
+  const response = await fetch(`/api/ml/quotes?${params.toString()}`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response);
+    throw new Error(message || "Could not load quotes.");
+  }
+
+  return (await response.json()) as {
+    results: MockQuote[];
+    errors: Array<{ ticker: string; message: string }>;
+  };
 }
 
 export async function fetchStockRecommendations(
@@ -113,34 +129,6 @@ export async function fetchStockRecommendations(
   }
 
   return ((await response.json()) as StockRecommendationsResponse).results;
-}
-
-export async function fetchStockPriceSnapshots(
-  tickers: string[],
-): Promise<PriceSnapshot[]> {
-  const normalizedTickers = Array.from(
-    new Set(
-      tickers.map((ticker) => ticker.trim().toUpperCase()).filter(Boolean),
-    ),
-  );
-
-  if (normalizedTickers.length === 0) {
-    return [];
-  }
-
-  const params = new URLSearchParams({
-    tickers: normalizedTickers.join(","),
-  });
-  const response = await fetch(`/api/ml/price-snapshots?${params.toString()}`, {
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const message = await readErrorMessage(response);
-    throw new Error(message || "Could not load market snapshots.");
-  }
-
-  return (await response.json()) as PriceSnapshot[];
 }
 
 export async function fetchMockTradingDay(
@@ -329,6 +317,42 @@ export async function fetchNewsReport(
   }
 
   return (await response.json()) as NewsReport;
+}
+
+export async function fetchMarketNews(options: {
+  limit?: number;
+  refreshSeconds?: number;
+  forceRefresh?: boolean;
+} = {}): Promise<MarketNews> {
+  const params = new URLSearchParams();
+  if (typeof options.limit === "number" && Number.isFinite(options.limit)) {
+    params.set("limit", String(Math.max(1, Math.floor(options.limit))));
+  }
+  if (
+    typeof options.refreshSeconds === "number" &&
+    Number.isFinite(options.refreshSeconds)
+  ) {
+    params.set(
+      "refreshSeconds",
+      String(Math.max(0, Math.floor(options.refreshSeconds))),
+    );
+  }
+  if (options.forceRefresh) {
+    params.set("forceRefresh", "true");
+  }
+
+  const query = params.toString();
+  const url = query ? `/api/ml/market-news?${query}` : "/api/ml/market-news";
+  const response = await fetch(url, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response);
+    throw new Error(message || "Could not load market news.");
+  }
+
+  return (await response.json()) as MarketNews;
 }
 
 export async function fetchInvestmentChatResponse(payload: {

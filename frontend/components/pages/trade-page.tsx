@@ -3,10 +3,13 @@
 import Image from "next/image";
 import Link from "next/link";
 import { startTransition, useEffect, useState } from "react";
+import { InvestmentChatBubble } from "@/components/dashboard/investment-chat-bubble";
+import { TradeStarterSectors } from "@/components/dashboard/trade-starter-sectors";
 import { AiDisclaimer } from "@/components/layout/ai-disclaimer";
 import { useTradeWorkspace } from "@/components/providers/trade-workspace-provider";
 import { LiveLineChart } from "@/components/stock/live-line-chart";
 import { StockCard } from "@/components/stock/stock-card";
+import { TradeMarketNews } from "@/components/trade/trade-market-news";
 import type { ModelProfile, RefreshCadence } from "@/lib/mocks/stock-data";
 import { MAX_TRACKED_TICKERS, type TradeMode } from "@/lib/trade-workspace";
 
@@ -160,7 +163,7 @@ export function TradePage() {
       : "Connecting";
 
   return (
-    <div className="flex max-w-5xl flex-col gap-4">
+    <div className="flex max-w-6xl flex-col gap-4">
       <section className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
@@ -246,6 +249,19 @@ export function TradePage() {
         </section>
       </section>
 
+      <section
+        id="trade-setup"
+        className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_24rem]"
+      >
+        <div className="flex flex-col gap-4">
+          <InvestmentChatBubble expanded showOpenTradeButton={false} />
+          <TradeMarketNews />
+        </div>
+        <div>
+          <TradeStarterSectors />
+        </div>
+      </section>
+
       <section className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
@@ -253,11 +269,11 @@ export function TradePage() {
               Trade basket
             </p>
             <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-              This page now works from the tracked symbols below. Change the basket from the dashboard starter sectors instead of typing a new ticker here.
+              This page works from the tracked symbols below. Load a starter basket from the sectors panel or let the AI prompt choose the symbols for you.
             </p>
             {!trackedTickers.length ? (
               <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-                No tracked symbols loaded. <Link href="/dashboard" className="font-semibold text-zinc-900 underline underline-offset-4 dark:text-zinc-100">Go to Dashboard</Link> to preload a basket.
+                No tracked symbols loaded. <Link href="#trade-setup" className="font-semibold text-zinc-900 underline underline-offset-4 dark:text-zinc-100">Use the setup panel above</Link> to preload a basket.
               </p>
             ) : null}
           </div>
@@ -699,13 +715,13 @@ export function TradePage() {
             Load a trade basket first
           </h2>
           <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            Use the dashboard starter sectors to preload up to three stocks, then come back here to review the basket, replay a practice day, or let TradeWise paper trade it for you.
+            Use the starter sectors or the AI prompt above to load up to three stocks, then review the basket, replay a practice day, or let TradeWise paper trade it for you.
           </p>
           <Link
-            href="/dashboard"
+            href="#trade-setup"
             className="mt-3 inline-flex rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
           >
-            Go to Dashboard
+            Open setup tools
           </Link>
         </section>
       )}

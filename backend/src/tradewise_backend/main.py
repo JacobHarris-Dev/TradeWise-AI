@@ -2,10 +2,10 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket
 from starlette.websockets import WebSocketState
 
 from . import MODEL_VERSION
-from .engine import build_price_snapshots, build_quote_response
+from .engine import build_quote_response, build_quote_responses
 from .live_stream import relay_live_trade_stream
 from .mock_trading import DEFAULT_MOCK_STEPS, MAX_MOCK_STEPS, MIN_MOCK_STEPS, build_mock_trading_day_response
-from .news import build_news_context_snapshot
+from .news import build_market_news_snapshot, build_news_context_snapshot
 from .news_reasoning import build_investment_chat_reply, build_student_news_reasoning
 from .paper_account import get_paper_account, grant_paper_position
 from .paper_portfolio import build_paper_account_performance
@@ -18,12 +18,14 @@ from .schemas import (
     AutoTradeResponse,
     InvestmentChatRequest,
     InvestmentChatResponse,
+    MarketNewsArticleResponse,
+    MarketNewsResponse,
     MockTradingDayResponse,
     NewsReportResponse,
     PaperPositionGrantRequest,
     PaperAccountResponse,
     PaperAccountPerformanceResponse,
-    PriceSnapshotResponse,
+    QuoteBatchResponse,
     QuoteResponse,
     StockRecommendationResponse,
     StockRecommendationsResponse,
@@ -62,12 +64,20 @@ def get_quote(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@app.get("/v1/price-snapshots", response_model=list[PriceSnapshotResponse])
-def get_price_snapshots(
+@app.get("/v1/quotes", response_model=QuoteBatchResponse)
+def get_quotes(
     tickers: str = Query(..., min_length=1, max_length=512),
-) -> list[PriceSnapshotResponse]:
+    include_chart: bool = Query(False, alias="includeChart"),
+    model_profile: str | None = Query(None, alias="modelProfile"),
+    chart_type: str | None = Query(None, alias="chartType"),
+) -> QuoteBatchResponse:
     try:
-        return build_price_snapshots(tickers.split(","))
+        return build_quote_responses(
+            [ticker.strip() for ticker in tickers.split(",") if ticker.strip()],
+            include_chart=include_chart,
+            model_profile=model_profile,
+            chart_type=chart_type,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -128,6 +138,43 @@ def investment_chat(payload: InvestmentChatRequest) -> InvestmentChatResponse:
         return InvestmentChatResponse(reply=result.text, source=result.source)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/v1/market-news", response_model=MarketNewsResponse)
+def get_market_news(
+    limit: int = Query(8, ge=1, le=20),
+    refresh_seconds: int | None = Query(None, alias="refreshSeconds", ge=0, le=3600),
+    force_refresh: bool = Query(False, alias="forceRefresh"),
+) -> MarketNewsResponse:
+    snapshot = build_market_news_snapshot(
+        limit=limit,
+        refresh_seconds=refresh_seconds,
+        force_refresh=force_refresh,
+    )
+    context = snapshot.context
+
+    return MarketNewsResponse(
+        summary=context.summary if context is not None else None,
+        sentiment=context.sentiment if context is not None else "neutral",
+        topics=list(context.topics) if context is not None else [],
+        refreshedAt=snapshot.fetched_at.isoformat(),
+        fromCache=snapshot.from_cache,
+        refreshSeconds=snapshot.refresh_seconds,
+        articleCount=len(snapshot.articles),
+        articles=[
+            MarketNewsArticleResponse(
+                title=article.title,
+                publisher=article.publisher,
+                link=article.link,
+                publishedAt=(
+                    article.published_at.isoformat()
+                    if article.published_at is not None
+                    else None
+                ),
+            )
+            for article in snapshot.articles
+        ],
+    )
 
 
 @app.get("/v1/news-report", response_model=NewsReportResponse)

@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 import re
 from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass
+from threading import Lock
+from time import monotonic
 
 import pandas as pd
 
@@ -31,9 +34,21 @@ DEFAULT_ALPACA_FEED = os.getenv("ML_MARKET_DATA_ALPACA_FEED", "delayed_sip").str
 ALLOWED_MARKET_DATA_PROVIDERS = {"yfinance", "alpaca"}
 YFINANCE_INTRADAY_LOOKBACK_DAYS = 60
 ALPACA_DELAY_MINUTES = 15
+DEFAULT_MARKET_DATA_CACHE_SECONDS = 20
+DEFAULT_MARKET_DATA_CACHE_MAX_ENTRIES = 128
 TICKER_ALIASES = {
     "APPL": "AAPL",
 }
+
+
+@dataclass(frozen=True)
+class _CachedPriceHistory:
+    history: pd.DataFrame
+    cached_at: float
+
+
+_PRICE_HISTORY_CACHE: dict[str, _CachedPriceHistory] = {}
+_PRICE_HISTORY_CACHE_LOCK = Lock()
 
 
 def normalize_ticker(raw_ticker: str) -> str:
@@ -54,6 +69,100 @@ def normalize_market_data_provider(provider: str | None) -> str:
     if selected not in ALLOWED_MARKET_DATA_PROVIDERS:
         raise ValueError("Invalid market data provider. Use yfinance or alpaca.")
     return selected
+
+
+def _market_data_cache_seconds() -> int:
+    raw_value = os.getenv(
+        "ML_MARKET_DATA_CACHE_SECONDS",
+        str(DEFAULT_MARKET_DATA_CACHE_SECONDS),
+    ).strip()
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return DEFAULT_MARKET_DATA_CACHE_SECONDS
+    return max(0, value)
+
+
+def _market_data_cache_max_entries() -> int:
+    raw_value = os.getenv(
+        "ML_MARKET_DATA_CACHE_MAX_ENTRIES",
+        str(DEFAULT_MARKET_DATA_CACHE_MAX_ENTRIES),
+    ).strip()
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return DEFAULT_MARKET_DATA_CACHE_MAX_ENTRIES
+    return max(1, value)
+
+
+def _price_history_cache_key(
+    *,
+    ticker: str,
+    start: str | None,
+    end: str | None,
+    period: str,
+    interval: str,
+    provider: str,
+    alpaca_feed: str,
+) -> str:
+    return "|".join(
+        [
+            ticker,
+            start or "",
+            end or "",
+            period,
+            interval,
+            provider,
+            alpaca_feed,
+        ]
+    )
+
+
+def _clone_history(history: pd.DataFrame) -> pd.DataFrame:
+    return history.copy(deep=True)
+
+
+def _cached_price_history(key: str, ttl_seconds: int) -> pd.DataFrame | None:
+    if ttl_seconds <= 0:
+        return None
+
+    now = monotonic()
+    with _PRICE_HISTORY_CACHE_LOCK:
+        cached = _PRICE_HISTORY_CACHE.get(key)
+        if cached is None:
+            return None
+        if (now - cached.cached_at) > ttl_seconds:
+            del _PRICE_HISTORY_CACHE[key]
+            return None
+        return _clone_history(cached.history)
+
+
+def _store_cached_price_history(key: str, history: pd.DataFrame, ttl_seconds: int) -> None:
+    if ttl_seconds <= 0:
+        return
+
+    now = monotonic()
+    max_entries = _market_data_cache_max_entries()
+    with _PRICE_HISTORY_CACHE_LOCK:
+        _PRICE_HISTORY_CACHE[key] = _CachedPriceHistory(
+            history=_clone_history(history),
+            cached_at=now,
+        )
+
+        expired_keys = [
+            cache_key
+            for cache_key, cached in _PRICE_HISTORY_CACHE.items()
+            if (now - cached.cached_at) > ttl_seconds
+        ]
+        for expired_key in expired_keys:
+            _PRICE_HISTORY_CACHE.pop(expired_key, None)
+
+        while len(_PRICE_HISTORY_CACHE) > max_entries:
+            oldest_key = min(
+                _PRICE_HISTORY_CACHE,
+                key=lambda cache_key: _PRICE_HISTORY_CACHE[cache_key].cached_at,
+            )
+            _PRICE_HISTORY_CACHE.pop(oldest_key, None)
 
 
 def _is_intraday_interval(interval: str) -> bool:
@@ -285,8 +394,22 @@ def download_price_history(
 ) -> pd.DataFrame:
     normalized = validate_ticker(normalize_ticker(ticker))
     selected_provider = normalize_market_data_provider(provider)
+    cache_ttl = _market_data_cache_seconds()
+    cache_key = _price_history_cache_key(
+        ticker=normalized,
+        start=start,
+        end=end,
+        period=period,
+        interval=interval,
+        provider=selected_provider,
+        alpaca_feed=alpaca_feed,
+    )
+    cached = _cached_price_history(cache_key, cache_ttl)
+    if cached is not None:
+        return cached
+
     if selected_provider == "alpaca":
-        return _download_alpaca_price_history(
+        history = _download_alpaca_price_history(
             normalized,
             start=start,
             end=end,
@@ -294,14 +417,17 @@ def download_price_history(
             interval=interval,
             feed=alpaca_feed,
         )
+    else:
+        history = _download_yfinance_price_history(
+            normalized,
+            start=start,
+            end=end,
+            period=period,
+            interval=interval,
+        )
 
-    return _download_yfinance_price_history(
-        normalized,
-        start=start,
-        end=end,
-        period=period,
-        interval=interval,
-    )
+    _store_cached_price_history(cache_key, history, cache_ttl)
+    return _clone_history(history)
 
 
 def get_close_history(

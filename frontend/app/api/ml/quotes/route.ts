@@ -9,5 +9,5 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: "Tickers are required." }, { status: 400 });
   }
 
-  return proxyToMlBackend(request, "/v1/price-snapshots");
+  return proxyToMlBackend(request, "/v1/quotes");
 }

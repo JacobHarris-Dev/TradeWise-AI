@@ -96,27 +96,43 @@ export function PortfolioGrowthChart({
       }) ?? [],
     [points],
   );
+  const hasLiveIntradayData = liveData.length > 0;
   const data = useMemo(
-    () => (liveData.length ? liveData : portfolioHistoryForRange(range, total)),
-    [liveData, range, total],
+    () => {
+      if (hasLiveIntradayData && range === "1d") {
+        return liveData;
+      }
+
+      return portfolioHistoryForRange(range, total);
+    },
+    [hasLiveIntradayData, liveData, range, total],
   );
   const firstValue = data[0]?.value ?? total;
   const resolvedDayChange = useMemo(
-    () => (typeof dayChange === "number" ? dayChange : total - firstValue),
-    [dayChange, firstValue, total],
+    () => {
+      if (range === "1d" && hasLiveIntradayData) {
+        return typeof dayChange === "number" ? dayChange : total - firstValue;
+      }
+
+      return total - firstValue;
+    },
+    [dayChange, firstValue, hasLiveIntradayData, range, total],
   );
   const pctChange = useMemo(
-    () =>
-      liveData.length
-        ? (typeof dayChangePercent === "number"
-            ? dayChangePercent
-            : firstValue > 0
-              ? Math.round(((total - firstValue) / firstValue) * 10000) / 100
-              : 0)
-        : portfolioPercentChange(range, total),
-    [dayChangePercent, firstValue, liveData.length, range, total],
+    () => {
+      if (range === "1d" && hasLiveIntradayData) {
+        return typeof dayChangePercent === "number"
+          ? dayChangePercent
+          : firstValue > 0
+            ? Math.round(((total - firstValue) / firstValue) * 10000) / 100
+            : 0;
+      }
+
+      return portfolioPercentChange(range, total);
+    },
+    [dayChangePercent, firstValue, hasLiveIntradayData, range, total],
   );
-  const isLiveIntraday = liveData.length > 0;
+  const isLiveIntraday = hasLiveIntradayData && range === "1d";
   const changePrefix = resolvedDayChange >= 0 ? "+" : "-";
 
   return (
@@ -145,11 +161,12 @@ export function PortfolioGrowthChart({
             </p>
           ) : null}
         </div>
-        {isLiveIntraday ? (
-          <div className="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">
-            1D live
-          </div>
-        ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          {hasLiveIntradayData ? (
+            <div className="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">
+              {range === "1d" ? "1D live" : "Live data available"}
+            </div>
+          ) : null}
           <div className="flex flex-wrap gap-1">
             {RANGES.map(({ key, label }) => (
               <button
@@ -166,10 +183,10 @@ export function PortfolioGrowthChart({
               </button>
             ))}
           </div>
-        )}
+        </div>
       </div>
 
-      <div className="mt-6 h-[280px] w-full min-h-[240px] min-w-0">
+      <div className="mt-6 h-70 w-full min-h-60 min-w-0">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <defs>

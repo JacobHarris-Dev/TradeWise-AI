@@ -12,7 +12,7 @@ import {
   fetchInvestmentChatResponse,
   fetchNewsReport,
   fetchPaperAccount,
-  fetchStockQuote,
+  fetchStockQuotes,
   fetchStockRecommendations,
 } from "@/lib/stock-quote";
 import {
@@ -27,6 +27,11 @@ import {
 type ChatMessage = {
   role: "assistant" | "user";
   text: string;
+};
+
+type InvestmentChatBubbleProps = {
+  expanded?: boolean;
+  showOpenTradeButton?: boolean;
 };
 
 const SECTOR_KEYWORDS: Record<string, string[]> = {
@@ -77,7 +82,10 @@ function scoreQuote(quote: MockQuote) {
   return signalBonus + (quote.confidence ?? 0);
 }
 
-export function InvestmentChatBubble() {
+export function InvestmentChatBubble({
+  expanded = false,
+  showOpenTradeButton = true,
+}: InvestmentChatBubbleProps) {
   const router = useRouter();
   const { user } = useAuth();
   const { setModelProfile } = useTradeWorkspace();
@@ -131,18 +139,12 @@ export function InvestmentChatBubble() {
         throw new Error("I could not find candidate stocks from that prompt.");
       }
 
-      const quoteResults = await Promise.allSettled(
-        candidateTickers.map((ticker) =>
-          fetchStockQuote(ticker, {
-            includeChart: false,
-            modelProfile: parsed.modelProfile,
-          }),
-        ),
-      );
+      const quoteBatch = await fetchStockQuotes(candidateTickers, {
+        includeChart: false,
+        modelProfile: parsed.modelProfile,
+      });
 
-      const rankedQuotes = quoteResults
-        .filter((result): result is PromiseFulfilledResult<MockQuote> => result.status === "fulfilled")
-        .map((result) => result.value)
+      const rankedQuotes = quoteBatch.results
         .sort((a, b) => scoreQuote(b) - scoreQuote(a))
         .slice(0, MAX_TRACKED_TICKERS);
 
@@ -194,10 +196,6 @@ export function InvestmentChatBubble() {
         trackedTickers,
       });
 
-      if (generated.source !== "qwen") {
-        throw new Error("Qwen did not generate a response.");
-      }
-
       setMessages((current) => [
         ...current,
         {
@@ -215,23 +213,40 @@ export function InvestmentChatBubble() {
   };
 
   return (
-    <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50/40 p-4">
-      <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-zinc-900">TradeWise AI Prompt</h3>
-        <button
-          type="button"
-          onClick={() => router.push("/trade")}
-          className="rounded-lg border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100"
-        >
-          Open Trade
-        </button>
+    <section
+      className={`rounded-2xl border border-emerald-200 bg-[linear-gradient(180deg,rgba(236,253,245,0.96),rgba(255,255,255,0.98))] ${
+        expanded ? "p-6" : "p-4"
+      }`}
+    >
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <h3 className={`${expanded ? "text-lg" : "text-sm"} font-semibold text-zinc-900`}>
+            TradeWise AI Prompt
+          </h3>
+          <p className={`mt-1 ${expanded ? "max-w-2xl text-sm leading-6" : "text-xs"} text-zinc-600`}>
+            Describe the kind of stocks you want to practice with and TradeWise will choose up to three symbols, load the basket, and explain the reasoning.
+          </p>
+        </div>
+        {showOpenTradeButton ? (
+          <button
+            type="button"
+            onClick={() => router.push("/trade")}
+            className="rounded-lg border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100"
+          >
+            Open Trade
+          </button>
+        ) : null}
       </div>
 
-      <div className="max-h-44 space-y-2 overflow-y-auto rounded-lg border border-zinc-200 bg-white p-3">
+      <div
+        className={`space-y-2 overflow-y-auto rounded-2xl border border-zinc-200 bg-white ${
+          expanded ? "max-h-80 p-4" : "max-h-44 p-3"
+        }`}
+      >
         {messages.map((message, index) => (
           <div
             key={`${message.role}-${index}`}
-            className={`max-w-[92%] rounded-xl px-3 py-2 text-sm ${
+            className={`max-w-[92%] rounded-2xl px-3 py-2 ${expanded ? "text-sm leading-6" : "text-sm"} ${
               message.role === "assistant"
                 ? "bg-zinc-100 text-zinc-800"
                 : "ml-auto bg-zinc-900 text-white"
@@ -242,24 +257,46 @@ export function InvestmentChatBubble() {
         ))}
       </div>
 
-      <form onSubmit={(event) => void handleSubmit(event)} className="mt-3 flex gap-2">
-        <input
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          placeholder="Example: I want safe tech + healthcare picks this week"
-          className="flex-1 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none ring-emerald-400 focus:ring-2"
-          disabled={loading}
-        />
-        <button
-          type="submit"
-          disabled={!canSubmit}
-          className="rounded-xl bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {loading ? "Thinking..." : "Track 3"}
-        </button>
+      <form
+        onSubmit={(event) => void handleSubmit(event)}
+        className={`mt-4 ${expanded ? "space-y-3" : "flex gap-2"}`}
+      >
+        {expanded ? (
+          <textarea
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder="Example: I want safer healthcare and tech names I can track this week without taking too much risk."
+            className="min-h-28 w-full rounded-2xl border border-zinc-300 bg-white px-4 py-3 text-sm leading-6 outline-none ring-emerald-400 focus:ring-2"
+            disabled={loading}
+          />
+        ) : (
+          <input
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder="Example: I want safe tech + healthcare picks this week"
+            className="flex-1 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none ring-emerald-400 focus:ring-2"
+            disabled={loading}
+          />
+        )}
+        <div className={expanded ? "flex items-center justify-between gap-3" : ""}>
+          {expanded ? (
+            <p className="text-xs text-zinc-500">
+              Replies use Qwen when available and fall back gracefully if the model is unavailable.
+            </p>
+          ) : null}
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            className={`rounded-xl bg-zinc-900 font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 ${
+              expanded ? "px-5 py-3 text-sm" : "px-4 py-2 text-sm"
+            }`}
+          >
+            {loading ? "Thinking..." : "Track 3"}
+          </button>
+        </div>
       </form>
 
-      {error ? <p className="mt-2 text-xs text-red-600">{error}</p> : null}
-    </div>
+      {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+    </section>
   );
 }

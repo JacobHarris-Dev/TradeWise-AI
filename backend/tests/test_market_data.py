@@ -9,6 +9,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from tradewise_backend import market_data
 from tradewise_backend.market_data import (
     YFINANCE_INTRADAY_LOOKBACK_DAYS,
     download_price_history,
@@ -17,6 +18,10 @@ from tradewise_backend.market_data import (
 
 
 class MarketDataTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        with market_data._PRICE_HISTORY_CACHE_LOCK:
+            market_data._PRICE_HISTORY_CACHE.clear()
+
     def test_download_price_history_rejects_invalid_provider(self) -> None:
         with self.assertRaisesRegex(ValueError, "Invalid market data provider"):
             download_price_history("AAPL", provider="polygon")
@@ -24,10 +29,13 @@ class MarketDataTestCase(unittest.TestCase):
     def test_download_price_history_uses_yfinance_helper_by_default(self) -> None:
         history = pd.DataFrame({"Close": np.arange(10.0, 20.0)})
 
-        with patch(
-            "tradewise_backend.market_data._download_yfinance_price_history",
-            return_value=history,
-        ) as mock_yfinance:
+        with (
+            patch("tradewise_backend.market_data.DEFAULT_MARKET_DATA_PROVIDER", "yfinance"),
+            patch(
+                "tradewise_backend.market_data._download_yfinance_price_history",
+                return_value=history,
+            ) as mock_yfinance,
+        ):
             returned = download_price_history("aapl", interval="15m")
 
         self.assertTrue(returned.equals(history))
@@ -96,7 +104,7 @@ class MarketDataTestCase(unittest.TestCase):
             "tradewise_backend.market_data._download_yfinance_price_history",
             return_value=history,
         ) as mock_yfinance:
-            returned = download_price_history("APPL")
+            returned = download_price_history("APPL", provider="yfinance", interval="1d")
 
         self.assertTrue(returned.equals(history))
         mock_yfinance.assert_called_once_with(
@@ -106,6 +114,25 @@ class MarketDataTestCase(unittest.TestCase):
             period="1y",
             interval="1d",
         )
+
+    def test_download_price_history_uses_cache_for_identical_requests(self) -> None:
+        history = pd.DataFrame({"Close": np.arange(10.0, 20.0)})
+
+        with (
+            patch.dict("tradewise_backend.market_data._PRICE_HISTORY_CACHE", {}, clear=True),
+            patch.dict("os.environ", {"ML_MARKET_DATA_CACHE_SECONDS": "60"}, clear=False),
+            patch(
+                "tradewise_backend.market_data._download_yfinance_price_history",
+                return_value=history,
+            ) as mock_yfinance,
+        ):
+            first = download_price_history("AAPL", provider="yfinance")
+            second = download_price_history("AAPL", provider="yfinance")
+
+        self.assertTrue(first.equals(history))
+        self.assertTrue(second.equals(history))
+        self.assertIsNot(first, second)
+        mock_yfinance.assert_called_once()
 
     def test_get_close_history_handles_2d_close_frame(self) -> None:
         rows = 65
