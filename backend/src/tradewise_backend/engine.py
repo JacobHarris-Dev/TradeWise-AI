@@ -38,6 +38,7 @@ from .schemas import (
     SignalLabel,
     TechnicalSnapshot,
 )
+from .stock_universe import get_stock_universe_row
 
 if TYPE_CHECKING:
     from .news import NewsContext
@@ -83,7 +84,8 @@ def validate_ticker(ticker: str) -> str:
 
 
 def _price_profile(ticker: str) -> QuoteProfile:
-    company_name = KNOWN_QUOTES.get(ticker, ticker)
+    stock_row = get_stock_universe_row(ticker)
+    company_name = stock_row.company_name if stock_row is not None else KNOWN_QUOTES.get(ticker, ticker)
     return QuoteProfile(company_name=company_name)
 
 

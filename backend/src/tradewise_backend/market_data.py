@@ -281,7 +281,41 @@ def _download_yfinance_price_history(
     except Exception as exc:  # pragma: no cover - network/provider failure
         raise RuntimeError(f"Failed to download price history for {ticker}: {exc}") from exc
 
-    return _normalize_history_frame(history, ticker)
+    try:
+        return _normalize_history_frame(history, ticker)
+    except ValueError:
+        # yfinance occasionally returns an empty frame for valid tickers via download().
+        # Retry with Ticker.history and a safe daily fallback before giving up.
+        pass
+
+    try:
+        ticker_client = yf.Ticker(ticker)
+        if _is_intraday_interval(interval):
+            fallback_history = ticker_client.history(
+                period="3mo",
+                interval=interval,
+                auto_adjust=True,
+            )
+        else:
+            fallback_history = ticker_client.history(
+                period=period,
+                interval=interval,
+                auto_adjust=True,
+            )
+
+        return _normalize_history_frame(fallback_history, ticker)
+    except Exception:
+        pass
+
+    fallback_daily = yf.download(
+        ticker,
+        period="1y",
+        interval="1d",
+        auto_adjust=True,
+        progress=False,
+        threads=False,
+    )
+    return _normalize_history_frame(fallback_daily, ticker)
 
 
 def _parse_period_to_start(period: str) -> datetime:

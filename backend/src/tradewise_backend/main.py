@@ -11,6 +11,13 @@ from .news import (
     build_news_context_snapshot_for_as_of,
 )
 from .news_reasoning import build_investment_chat_reply, build_student_news_reasoning
+from .news import build_market_news_snapshot, build_news_context_snapshot
+from .news_reasoning import (
+    build_investment_chat_reply,
+    build_market_news_brief,
+    build_portfolio_coach_reply,
+    build_student_news_reasoning,
+)
 from .paper_account import get_paper_account, grant_paper_position
 from .paper_portfolio import build_paper_account_performance
 from .paper_trading import execute_auto_trade, execute_auto_trade_batch
@@ -30,14 +37,18 @@ from .schemas import (
     PaperPositionGrantRequest,
     PaperAccountResponse,
     PaperAccountPerformanceResponse,
+    PortfolioCoachRequest,
+    PortfolioCoachResponse,
     QuoteBatchResponse,
     QuoteResponse,
     StockRecommendationResponse,
     StockRecommendationsResponse,
+    StockUniverseResolveMatchResponse,
+    StockUniverseResolveResponse,
     WatchSessionResponse,
     WatchSessionStartRequest,
 )
-from .stock_universe import recommend_stocks_for_sectors
+from .stock_universe import recommend_stocks_for_sectors, resolve_stock_universe_matches
 
 app = FastAPI(title="TradeWise ML Backend", version=MODEL_VERSION)
 
@@ -124,6 +135,30 @@ def get_stock_recommendations(
     )
 
 
+@app.get("/v1/stock-universe/resolve", response_model=StockUniverseResolveResponse)
+def resolve_stock_universe(
+    query: str = Query(..., min_length=1, max_length=256),
+    count: int = Query(3, ge=1, le=10),
+) -> StockUniverseResolveResponse:
+    results = resolve_stock_universe_matches(query, count=count)
+    return StockUniverseResolveResponse(
+        query=query,
+        count=count,
+        results=[
+            StockUniverseResolveMatchResponse(
+                ticker=match.row.ticker,
+                companyName=match.row.company_name,
+                sector=match.row.sector,
+                industry=match.row.industry,
+                matchType=match.match_type,
+                matchedTerm=match.matched_term,
+                score=match.score,
+            )
+            for match in results
+        ],
+    )
+
+
 @app.post("/v1/analyze", response_model=QuoteResponse)
 def analyze_quote(payload: AnalyzeRequest) -> QuoteResponse:
     try:
@@ -153,6 +188,29 @@ def investment_chat(payload: InvestmentChatRequest) -> InvestmentChatResponse:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/v1/portfolio-coach", response_model=PortfolioCoachResponse)
+def portfolio_coach(payload: PortfolioCoachRequest) -> PortfolioCoachResponse:
+    coach = build_portfolio_coach_reply(
+        cash=payload.cash,
+        total_equity=payload.totalEquity,
+        day_change_percent=payload.portfolioChangePercent,
+        positions=[
+            {
+                "ticker": position.ticker,
+                "shares": position.shares,
+                "marketValue": position.marketValue,
+                "changePercent": position.changePercent,
+            }
+            for position in payload.positions
+        ],
+        force_refresh=payload.forceRefresh,
+    )
+    return PortfolioCoachResponse(
+        coachSummary=coach.text,
+        coachSource=coach.source,
+    )
+
+
 @app.get("/v1/market-news", response_model=MarketNewsResponse)
 def get_market_news(
     limit: int = Query(8, ge=1, le=20),
@@ -165,9 +223,18 @@ def get_market_news(
         force_refresh=force_refresh,
     )
     context = snapshot.context
+    llm_brief = build_market_news_brief(
+        summary=context.summary if context is not None else None,
+        sentiment=context.sentiment if context is not None else "neutral",
+        topics=list(context.topics) if context is not None else [],
+        headlines=[article.title for article in snapshot.articles],
+        force_refresh=force_refresh,
+    )
 
     return MarketNewsResponse(
         summary=context.summary if context is not None else None,
+        llmBrief=llm_brief.text,
+        briefSource=llm_brief.source,
         sentiment=context.sentiment if context is not None else "neutral",
         topics=list(context.topics) if context is not None else [],
         refreshedAt=snapshot.fetched_at.isoformat(),
@@ -245,7 +312,7 @@ def get_news_report(
         ticker=quote.ticker,
         report=reasoning.text,
         studentReasoning=reasoning.text,
-        reasoningSource="qwen" if reasoning.source == "qwen" else "template",
+        reasoningSource=reasoning.source,
         signal=quote.signal,
         confidence=quote.confidence,
         modelVersion=quote.modelVersion,
@@ -350,8 +417,34 @@ def paper_account(
 @app.get("/v1/paper-account/performance", response_model=PaperAccountPerformanceResponse)
 def paper_account_performance(
     user_id: str | None = Query(None, alias="userId"),
+    include_coach: bool = Query(False, alias="includeCoach"),
+    force_coach_refresh: bool = Query(False, alias="forceCoachRefresh"),
 ) -> PaperAccountPerformanceResponse:
-    return build_paper_account_performance(user_id)
+    performance = build_paper_account_performance(user_id)
+    if not include_coach:
+        return performance
+
+    coach = build_portfolio_coach_reply(
+        cash=performance.cash,
+        total_equity=performance.totalEquity,
+        day_change_percent=performance.dayChangePercent,
+        positions=[
+            {
+                "ticker": position.ticker,
+                "shares": position.shares,
+                "marketValue": position.marketValue,
+                "changePercent": position.changePercent,
+            }
+            for position in performance.positions
+        ],
+        force_refresh=force_coach_refresh,
+    )
+    return performance.model_copy(
+        update={
+            "coachSummary": coach.text,
+            "coachSource": coach.source,
+        }
+    )
 
 
 @app.post("/v1/paper-account/grant", response_model=PaperAccountResponse)

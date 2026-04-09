@@ -44,6 +44,15 @@ function formatMoney(value: number) {
   });
 }
 
+type PortfolioPositionRow = {
+  ticker: string;
+  shares: number;
+  avgEntryPrice: number;
+  currentPrice: number;
+  marketValue: number;
+  changePercent: number;
+};
+
 export function PortfolioPage() {
   const {
     simulationSnapshot,
@@ -56,6 +65,7 @@ export function PortfolioPage() {
   simulatedDateRef.current = simulatedDate;
   const useHistoricSim =
     tradingTimeMode === "historic" && simulationSnapshot != null;
+  const { simulation, simulationSnapshot } = useTradeWorkspace();
   const {
     portfolio,
     portfolioLoading: loading,
@@ -65,27 +75,99 @@ export function PortfolioPage() {
   const [featuredQuotes, setFeaturedQuotes] = useState<MockQuote[]>([]);
   const [featuredLoading, setFeaturedLoading] = useState(true);
 
-  const positionRows = useMemo(() => {
-    if (simulationSnapshot) {
-      return simulationSnapshot.positions.map((position) => ({
-        ticker: position.symbol,
-        shares: position.shares,
-        marketValue: position.value,
-      }));
-    }
-    return portfolio?.positions ?? [];
-  }, [portfolio, simulationSnapshot]);
+  const usesSimulationPortfolio = Boolean(
+    simulation &&
+      simulationSnapshot &&
+      (
+        simulation.trades.length > 0 ||
+        simulationSnapshot.positions.length > 0 ||
+        Math.abs(simulationSnapshot.cash - 10_000) > 0.001
+      ),
+  );
 
-  const cashValue = simulationSnapshot?.cash ?? portfolio?.cash ?? 0;
+  const positionRows = useMemo<PortfolioPositionRow[]>(() => {
+    if (simulation && simulationSnapshot && usesSimulationPortfolio) {
+      const costBasisBySymbol = new Map<string, { shares: number; cost: number }>();
+      for (const trade of simulation.trades) {
+        const current = costBasisBySymbol.get(trade.symbol) ?? { shares: 0, cost: 0 };
+        if (trade.type === "buy") {
+          costBasisBySymbol.set(trade.symbol, {
+            shares: current.shares + trade.shares,
+            cost: current.cost + trade.price * trade.shares,
+          });
+          continue;
+        }
+
+        if (current.shares <= 0) {
+          costBasisBySymbol.set(trade.symbol, { shares: 0, cost: 0 });
+          continue;
+        }
+
+        const avgCost = current.cost / current.shares;
+        const nextShares = Math.max(0, current.shares - trade.shares);
+        const nextCost = Math.max(0, current.cost - avgCost * trade.shares);
+        costBasisBySymbol.set(trade.symbol, {
+          shares: nextShares,
+          cost: nextShares > 0 ? nextCost : 0,
+        });
+      }
+
+      return simulationSnapshot.positions.map((position) => {
+        const basis = costBasisBySymbol.get(position.symbol);
+        const avgEntryPrice =
+          basis && basis.shares > 0
+            ? basis.cost / basis.shares
+            : position.price;
+        return {
+          ticker: position.symbol,
+          shares: position.shares,
+          avgEntryPrice,
+          currentPrice: position.price,
+          marketValue: position.value,
+          changePercent:
+            avgEntryPrice > 0
+              ? ((position.price - avgEntryPrice) / avgEntryPrice) * 100
+              : 0,
+        };
+      });
+    }
+
+    return (portfolio?.positions ?? []).map((position) => ({
+      ticker: position.ticker,
+      shares: position.shares,
+      avgEntryPrice: position.avgEntryPrice,
+      currentPrice: position.currentPrice,
+      marketValue: position.marketValue,
+      changePercent:
+        position.avgEntryPrice > 0
+          ? ((position.currentPrice - position.avgEntryPrice) / position.avgEntryPrice) * 100
+          : 0,
+    }));
+  }, [portfolio, simulation, simulationSnapshot, usesSimulationPortfolio]);
+
+  const cashValue =
+    usesSimulationPortfolio && simulationSnapshot
+      ? simulationSnapshot.cash
+      : portfolio?.cash ?? 0;
   const positionsValue =
-    simulationSnapshot
+    usesSimulationPortfolio && simulationSnapshot
       ? simulationSnapshot.portfolioValue - simulationSnapshot.cash
       : portfolio?.positionsValue ?? 0;
   const totalEquityValue =
-    simulationSnapshot?.portfolioValue ?? portfolio?.totalEquity ?? 0;
+    usesSimulationPortfolio && simulationSnapshot
+      ? simulationSnapshot.portfolioValue
+      : portfolio?.totalEquity ?? 0;
+  const baselineEquity = usesSimulationPortfolio
+    ? 10_000
+    : portfolio?.baselineEquity ?? portfolio?.startingCash ?? 10000;
+  const totalEquity = totalEquityValue || portfolio?.cash || 0;
+  const totalReturn = totalEquity - baselineEquity;
+  const totalReturnPercent =
+    baselineEquity > 0 ? (totalReturn / baselineEquity) * 100 : 0;
+  const isPositive = totalReturn >= 0;
 
   const allocationRows = useMemo(() => {
-    if (simulationSnapshot) {
+    if (usesSimulationPortfolio && simulationSnapshot) {
       return [
         ...(simulationSnapshot.cash > 0
           ? [{ ticker: "Cash", value: simulationSnapshot.cash }]
@@ -112,7 +194,7 @@ export function PortfolioPage() {
     }
 
     return rows;
-  }, [portfolio, positionRows, simulationSnapshot]);
+  }, [portfolio, positionRows, simulationSnapshot, usesSimulationPortfolio]);
 
   const featuredSymbols = useMemo(() => {
     return Array.from(
@@ -171,6 +253,7 @@ export function PortfolioPage() {
   const totalReturnPercent =
     baselineEquity > 0 ? (totalReturn / baselineEquity) * 100 : 0;
   const isPositive = totalReturn >= 0;
+  }, [featuredSymbols]);
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -211,6 +294,7 @@ export function PortfolioPage() {
             </h3>
             <div className="font-mono text-3xl font-bold text-slate-200">
               ${formatMoney(useHistoricSim ? simulationSnapshot.cash : portfolio?.cash ?? 0)}
+              ${formatMoney(cashValue)}
             </div>
           </div>
 
@@ -224,6 +308,7 @@ export function PortfolioPage() {
                   ? simulationSnapshot.portfolioValue - simulationSnapshot.cash
                   : portfolio?.positionsValue ?? 0,
               )}
+              ${formatMoney(positionsValue)}
             </div>
           </div>
         </div>

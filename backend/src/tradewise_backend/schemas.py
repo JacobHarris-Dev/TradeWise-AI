@@ -54,6 +54,8 @@ class MarketNewsArticleResponse(BaseModel):
 
 class MarketNewsResponse(BaseModel):
     summary: str | None = None
+    llmBrief: str | None = None
+    briefSource: Literal["qwen", "template", "remote-llm"] | None = None
     sentiment: NewsSentiment = "neutral"
     topics: list[str] = Field(default_factory=list)
     refreshedAt: str
@@ -85,11 +87,27 @@ class StockRecommendationsResponse(BaseModel):
     results: list[StockRecommendationResponse] = Field(default_factory=list)
 
 
+class StockUniverseResolveMatchResponse(BaseModel):
+    ticker: str
+    companyName: str
+    sector: str
+    industry: str
+    matchType: Literal["ticker", "company", "alias", "search-term", "theme-tag", "company-fragment"]
+    matchedTerm: str
+    score: int = Field(ge=0)
+
+
+class StockUniverseResolveResponse(BaseModel):
+    query: str
+    count: int = Field(ge=1)
+    results: list[StockUniverseResolveMatchResponse] = Field(default_factory=list)
+
+
 class NewsReportResponse(BaseModel):
     ticker: str
     report: str
     studentReasoning: str | None = None
-    reasoningSource: Literal["qwen", "template"] = "template"
+    reasoningSource: Literal["qwen", "template", "remote-llm"] = "template"
     signal: SignalLabel
     confidence: float = Field(ge=0, le=100)
     modelVersion: str
@@ -112,7 +130,27 @@ class InvestmentChatRequest(BaseModel):
 
 class InvestmentChatResponse(BaseModel):
     reply: str
-    source: Literal["qwen", "template"] = "template"
+    source: Literal["qwen", "template", "remote-llm"] = "template"
+
+
+class PortfolioCoachPositionRequest(BaseModel):
+    ticker: str = Field(min_length=1, max_length=16)
+    shares: float = Field(ge=0)
+    marketValue: float = Field(ge=0)
+    changePercent: float | None = None
+
+
+class PortfolioCoachRequest(BaseModel):
+    cash: float = Field(ge=0)
+    totalEquity: float = Field(ge=0)
+    portfolioChangePercent: float
+    positions: list[PortfolioCoachPositionRequest] = Field(default_factory=list)
+    forceRefresh: bool = False
+
+
+class PortfolioCoachResponse(BaseModel):
+    coachSummary: str
+    coachSource: Literal["qwen", "template", "remote-llm"]
 
 
 class AnalyzeRequest(BaseModel):
@@ -263,6 +301,8 @@ class PaperAccountPerformanceResponse(BaseModel):
     baselineEquity: float = Field(ge=0)
     positions: list[PaperAccountPerformancePosition]
     points: list[PaperAccountPerformancePoint]
+    coachSummary: str | None = None
+    coachSource: Literal["qwen", "template", "remote-llm"] | None = None
     updatedAt: str
 
 
