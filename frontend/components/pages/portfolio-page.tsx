@@ -55,6 +55,7 @@ type PortfolioPositionRow = {
 
 export function PortfolioPage() {
   const {
+    simulation,
     simulationSnapshot,
     tradingTimeMode,
     simulatedDate,
@@ -65,7 +66,6 @@ export function PortfolioPage() {
   simulatedDateRef.current = simulatedDate;
   const useHistoricSim =
     tradingTimeMode === "historic" && simulationSnapshot != null;
-  const { simulation, simulationSnapshot } = useTradeWorkspace();
   const {
     portfolio,
     portfolioLoading: loading,
@@ -243,18 +243,6 @@ export function PortfolioPage() {
     };
   }, [featuredSymbols, featuredHistoricMinuteKey, tradingTimeMode]);
 
-  const totalEquity = useHistoricSim
-    ? simulationSnapshot.portfolioValue
-    : portfolio?.totalEquity ?? portfolio?.cash ?? 0;
-  const baselineEquity = useHistoricSim
-    ? 10_000
-    : portfolio?.baselineEquity ?? portfolio?.startingCash ?? 10000;
-  const totalReturn = totalEquity - baselineEquity;
-  const totalReturnPercent =
-    baselineEquity > 0 ? (totalReturn / baselineEquity) * 100 : 0;
-  const isPositive = totalReturn >= 0;
-  }, [featuredSymbols]);
-
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <div className="mb-2 flex items-center gap-3">
@@ -293,7 +281,6 @@ export function PortfolioPage() {
               <Wallet className="mr-2 h-4 w-4 text-indigo-400" /> Purchasing Power
             </h3>
             <div className="font-mono text-3xl font-bold text-slate-200">
-              ${formatMoney(useHistoricSim ? simulationSnapshot.cash : portfolio?.cash ?? 0)}
               ${formatMoney(cashValue)}
             </div>
           </div>
@@ -303,11 +290,6 @@ export function PortfolioPage() {
               <PieChart className="mr-2 h-4 w-4 text-indigo-400" /> Invested Capital
             </h3>
             <div className="font-mono text-3xl font-bold text-slate-200">
-              ${formatMoney(
-                useHistoricSim
-                  ? simulationSnapshot.portfolioValue - simulationSnapshot.cash
-                  : portfolio?.positionsValue ?? 0,
-              )}
               ${formatMoney(positionsValue)}
             </div>
           </div>

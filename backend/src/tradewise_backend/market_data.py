@@ -206,6 +206,58 @@ def _is_intraday_interval(interval: str) -> bool:
     return normalized.endswith(("m", "h")) and not normalized.endswith("mo")
 
 
+def _parse_interval_timedelta(interval: str) -> timedelta | None:
+    normalized = interval.strip().lower()
+    if normalized.endswith("wk"):
+        amount_text = normalized[:-2]
+        if amount_text.isdigit():
+            return timedelta(weeks=int(amount_text))
+        return None
+    if normalized.endswith("mo"):
+        amount_text = normalized[:-2]
+        if amount_text.isdigit():
+            return timedelta(days=30 * int(amount_text))
+        return None
+    if normalized.endswith("m"):
+        amount_text = normalized[:-1]
+        if amount_text.isdigit():
+            return timedelta(minutes=int(amount_text))
+        return None
+    if normalized.endswith("h"):
+        amount_text = normalized[:-1]
+        if amount_text.isdigit():
+            return timedelta(hours=int(amount_text))
+        return None
+    if normalized.endswith("d"):
+        amount_text = normalized[:-1]
+        if amount_text.isdigit():
+            return timedelta(days=int(amount_text))
+    return None
+
+
+def _historical_lookback_delta(length: int, interval: str) -> timedelta:
+    interval_delta = _parse_interval_timedelta(interval)
+    if interval_delta is None:
+        return timedelta(days=max(120, length * 4))
+
+    normalized = interval.strip().lower()
+    if normalized.endswith("m"):
+        estimated = interval_delta * max(length * 16, length + 48)
+        return max(timedelta(days=7), estimated)
+    if normalized.endswith("h"):
+        estimated = interval_delta * max(length * 12, length + 32)
+        return max(timedelta(days=14), estimated)
+    if normalized.endswith("wk"):
+        estimated = interval_delta * max(length * 3, length + 12)
+        return max(timedelta(days=365), estimated)
+    if normalized.endswith("mo"):
+        estimated = interval_delta * max(length * 2, length + 6)
+        return max(timedelta(days=365 * 2), estimated)
+
+    estimated = interval_delta * max(length * 4, length + 20)
+    return max(timedelta(days=120), estimated)
+
+
 def _normalize_history_frame(history: pd.DataFrame, ticker: str) -> pd.DataFrame:
     if history is None:
         raise RuntimeError(f"Failed to download price history for {ticker}.")
@@ -596,8 +648,7 @@ def get_close_history(
         if parsed is None:
             raise ValueError("Invalid as-of datetime. Use ISO-8601 format.")
         resolved_end = as_of
-        lookback_days = max(400, length * 4)
-        resolved_start = (parsed - timedelta(days=lookback_days)).isoformat()
+        resolved_start = (parsed - _historical_lookback_delta(length, interval)).isoformat()
 
     history = download_price_history(
         ticker,
@@ -643,8 +694,7 @@ def get_ohlc_history(
         if parsed is None:
             raise ValueError("Invalid as-of datetime. Use ISO-8601 format.")
         resolved_end = as_of
-        lookback_days = max(400, length * 4)
-        resolved_start = (parsed - timedelta(days=lookback_days)).isoformat()
+        resolved_start = (parsed - _historical_lookback_delta(length, interval)).isoformat()
 
     history = download_price_history(
         ticker,

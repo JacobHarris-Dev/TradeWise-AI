@@ -56,6 +56,18 @@ const ACTION_LABELS = {
   hold: "Wait",
 } as const;
 
+const RECOMMENDATION_BADGES = {
+  buy: "bg-emerald-500/15 text-emerald-300 ring-1 ring-inset ring-emerald-500/30",
+  sell: "bg-rose-500/15 text-rose-300 ring-1 ring-inset ring-rose-500/30",
+  hold: "bg-slate-800/90 text-slate-300 ring-1 ring-inset ring-slate-700",
+} as const;
+
+const RECOMMENDATION_LABELS = {
+  buy: "Buy setup",
+  sell: "Sell setup",
+  hold: "Hold only",
+} as const;
+
 const TRADE_MODE_LABELS = {
   manual: "I decide",
   model: "TradeWise decides",
@@ -104,8 +116,308 @@ function QuotePriceLoadingLabel({
         className="size-3.5 shrink-0 animate-spin rounded-full border-2 border-slate-600 border-t-indigo-400"
         aria-hidden
       />
-      Loading data…
+      Loading data...
     </span>
+  );
+}
+
+type TimelinePoint = {
+  time: string;
+  price: number;
+};
+
+type TimelineDisplay = {
+  lastPrice: number;
+  changePercent: number;
+};
+
+type TradeRecommendation = "buy" | "sell" | "hold";
+
+function interpolateTimelinePrice(
+  points: TimelinePoint[],
+  targetTime?: string | null,
+): number | null {
+  if (!points.length) {
+    return null;
+  }
+  if (!targetTime || points.length === 1) {
+    return points[points.length - 1]?.price ?? null;
+  }
+
+  const targetMs = new Date(targetTime).getTime();
+  if (Number.isNaN(targetMs)) {
+    return points[points.length - 1]?.price ?? null;
+  }
+
+  const firstMs = new Date(points[0].time).getTime();
+  if (!Number.isNaN(firstMs) && targetMs <= firstMs) {
+    return points[0].price;
+  }
+
+  for (let index = 1; index < points.length; index += 1) {
+    const next = points[index];
+    const nextMs = new Date(next.time).getTime();
+    if (Number.isNaN(nextMs)) {
+      continue;
+    }
+    if (targetMs > nextMs) {
+      continue;
+    }
+
+    const previous = points[index - 1] ?? next;
+    const previousMs = new Date(previous.time).getTime();
+    if (
+      Number.isNaN(previousMs) ||
+      targetMs <= previousMs ||
+      nextMs <= previousMs
+    ) {
+      return previous.price;
+    }
+
+    const ratio = (targetMs - previousMs) / (nextMs - previousMs);
+    return Number(
+      (previous.price + (next.price - previous.price) * ratio).toFixed(4),
+    );
+  }
+
+  return points[points.length - 1]?.price ?? null;
+}
+
+function resolveTimelineDisplay(
+  points: TimelinePoint[],
+  targetTime?: string | null,
+): TimelineDisplay | null {
+  const lastPrice = interpolateTimelinePrice(points, targetTime);
+  if (lastPrice == null) {
+    return null;
+  }
+
+  const firstPointMs = points.length ? new Date(points[0].time).getTime() : NaN;
+  const targetMs = targetTime ? new Date(targetTime).getTime() : NaN;
+  const previousTargetTime =
+    !Number.isNaN(targetMs) && !Number.isNaN(firstPointMs)
+      ? new Date(Math.max(firstPointMs, targetMs - 60_000)).toISOString()
+      : points[Math.max(0, points.length - 2)]?.time ?? targetTime ?? null;
+  const previousPrice =
+    interpolateTimelinePrice(points, previousTargetTime) ?? lastPrice;
+
+  return {
+    lastPrice,
+    changePercent:
+      previousPrice > 0
+        ? Number((((lastPrice / previousPrice) - 1) * 100).toFixed(2))
+        : 0,
+  };
+}
+
+type ReplayModelRead = {
+  signal: TradeSignal;
+  confidence: number;
+};
+
+const REPLAY_SHORT_WINDOW = 5;
+const REPLAY_LONG_WINDOW = 20;
+const REPLAY_MOMENTUM_WINDOW = 7;
+const REPLAY_ANNUAL_RATE = 0.045;
+
+function parseReplayIntervalMs(interval?: string | null) {
+  if (!interval) {
+    return null;
+  }
+  const match = interval.trim().toLowerCase().match(/^(\d+)(m|h|d)$/);
+  if (!match) {
+    return null;
+  }
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  const unit = match[2];
+  if (unit === "m") {
+    return value * 60_000;
+  }
+  if (unit === "h") {
+    return value * 60 * 60_000;
+  }
+  return value * 24 * 60 * 60_000;
+}
+
+function average(values: number[]) {
+  if (!values.length) {
+    return 0;
+  }
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function sampleStd(values: number[]) {
+  if (values.length < 2) {
+    return 0;
+  }
+  const mean = average(values);
+  const variance =
+    values.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
+    (values.length - 1);
+  return Math.sqrt(Math.max(0, variance));
+}
+
+function replaySignalFromScore(score: number): TradeSignal {
+  if (score > 0.12) {
+    return "bullish";
+  }
+  if (score < -0.12) {
+    return "bearish";
+  }
+  return "neutral";
+}
+
+function buildReplayCloses(
+  quote: {
+    history?: number[];
+    marketDataInterval?: string | null;
+  },
+  timelineEndIso: string | null | undefined,
+  targetTime: string | null | undefined,
+) {
+  const history = quote.history ?? [];
+  if (!history.length) {
+    return [];
+  }
+
+  const intervalMs = parseReplayIntervalMs(quote.marketDataInterval) ?? 60_000;
+  const endMs = timelineEndIso ? new Date(timelineEndIso).getTime() : Number.NaN;
+  const targetMs = targetTime ? new Date(targetTime).getTime() : Number.NaN;
+
+  if (Number.isNaN(endMs) || Number.isNaN(targetMs) || targetMs >= endMs) {
+    return history.slice();
+  }
+
+  const offsetBars = (endMs - targetMs) / intervalMs;
+  const rawIndex = history.length - 1 - offsetBars;
+  if (rawIndex <= 0) {
+    return history.slice(0, Math.min(history.length, REPLAY_LONG_WINDOW));
+  }
+
+  const floorIndex = Math.floor(rawIndex);
+  const fraction = rawIndex - floorIndex;
+  const closes = history.slice(0, Math.max(1, floorIndex + 1));
+
+  if (fraction > 0 && floorIndex + 1 < history.length) {
+    const current = history[floorIndex] ?? history[history.length - 1] ?? 0;
+    const next = history[floorIndex + 1] ?? current;
+    closes.push(Number((current + (next - current) * fraction).toFixed(4)));
+  }
+
+  return closes;
+}
+
+function deriveReplayModelRead(
+  quote: {
+    history?: number[];
+    marketDataInterval?: string | null;
+    signal?: TradeSignal;
+    confidence?: number;
+  },
+  timelineEndIso: string | null | undefined,
+  targetTime: string | null | undefined,
+): ReplayModelRead | null {
+  const closes = buildReplayCloses(quote, timelineEndIso, targetTime);
+  if (closes.length < REPLAY_LONG_WINDOW || closes.length <= REPLAY_MOMENTUM_WINDOW) {
+    if (!quote.signal) {
+      return null;
+    }
+    return {
+      signal: quote.signal,
+      confidence: quote.confidence ?? 50,
+    };
+  }
+
+  const lastPrice = closes[closes.length - 1] ?? 0;
+  const shortMa = average(closes.slice(-REPLAY_SHORT_WINDOW));
+  const longMa = average(closes.slice(-REPLAY_LONG_WINDOW));
+  const momentumBase = closes[closes.length - 1 - REPLAY_MOMENTUM_WINDOW] ?? lastPrice;
+  const momentum =
+    momentumBase > 0 ? lastPrice / momentumBase - 1 : 0;
+  const returns = closes
+    .slice(1)
+    .map((value, index) => {
+      const previous = closes[index] ?? 0;
+      return previous > 0 ? value / previous - 1 : 0;
+    });
+  const volatility = sampleStd(returns);
+  const trendStrength = longMa > 0 ? shortMa / longMa - 1 : 0;
+  const discountFactor = Math.exp((-REPLAY_ANNUAL_RATE * 30) / 365);
+  const score =
+    (
+      0.55 * Math.tanh(trendStrength * 10) +
+      0.3 * Math.tanh(momentum * 7) -
+      0.15 * Math.tanh(volatility * 45)
+    ) *
+    discountFactor;
+
+  return {
+    signal: replaySignalFromScore(score),
+    confidence: Number(
+      Math.min(99, Math.max(50, 55 + Math.abs(score) * 45)).toFixed(1),
+    ),
+  };
+}
+
+function deriveTradeRecommendation({
+  signal,
+  confidence,
+  sentiment,
+  changePercent,
+}: {
+  signal: TradeSignal;
+  confidence: number;
+  sentiment?: "positive" | "negative" | "neutral" | null;
+  changePercent: number;
+}): TradeRecommendation {
+  if (signal === "bullish") {
+    return "buy";
+  }
+  if (signal === "bearish") {
+    return "sell";
+  }
+
+  if (sentiment === "positive" && changePercent >= -0.5) {
+    return "buy";
+  }
+  if (sentiment === "negative" && changePercent <= 0.5) {
+    return "sell";
+  }
+
+  if (
+    confidence < 54 &&
+    (sentiment == null || sentiment === "neutral") &&
+    Math.abs(changePercent) < 0.6
+  ) {
+    return "hold";
+  }
+
+  return changePercent >= 0 ? "buy" : "sell";
+}
+
+function recommendationToSignal(action: TradeRecommendation): TradeSignal {
+  if (action === "buy") {
+    return "bullish";
+  }
+  if (action === "sell") {
+    return "bearish";
+  }
+  return "neutral";
+}
+
+function recommendationPhrase(action: TradeRecommendation) {
+  if (action === "buy") {
+    return "buying";
+  }
+  if (action === "sell") {
+    return "selling";
+  }
+  return "holding";
+}
+
 function confidenceDescriptor(confidence: number) {
   if (confidence >= 80) {
     return "High conviction";
@@ -250,6 +562,7 @@ export function TradePage() {
     simulation,
     simulationSnapshot,
     simulatedDate,
+    historicReplayWindowHours,
     tradingTimeMode,
     advanceSimulationTime,
     resetSimulationTime,
@@ -303,6 +616,8 @@ export function TradePage() {
 
   const quote = selectedTicker ? quotesByTicker[selectedTicker] ?? null : null;
   const newsReport = selectedTicker ? newsReportsByTicker[selectedTicker] ?? null : null;
+  const isHistoricSession =
+    tradingTimeMode === "historic" && simulationSnapshot != null;
   const selectedSimPriceSymbol = selectedTicker || quote?.ticker || trackedTickers[0] || "";
   const selectedSimPrice = simulationSnapshot
     ? simulationSnapshot.currentPrices[selectedSimPriceSymbol] ?? null
@@ -336,10 +651,6 @@ export function TradePage() {
     tradingTimeMode === "historic"
       ? "Historic session · quotes & headlines follow simulated time"
       : liveMarketStatusLine;
-  const selectedSimPrice =
-    selectedTicker && simulationSnapshot?.currentPrices[selectedTicker] != null
-      ? simulationSnapshot.currentPrices[selectedTicker]
-      : null;
   const paperTradeStats = useMemo(() => {
     return paperTradeLog.reduce(
       (acc, entry) => {
@@ -357,6 +668,148 @@ export function TradePage() {
     () => simulation?.priceTimelineBySymbol[selectedSimPriceSymbol] ?? [],
     [selectedSimPriceSymbol, simulation],
   );
+  const historicDisplaysByTicker = useMemo<Record<string, TimelineDisplay | null>>(
+    () => {
+      if (!isHistoricSession || !simulationSnapshot || !simulation) {
+        return {};
+      }
+      const next: Record<string, TimelineDisplay | null> = {};
+      for (const ticker of trackedTickers) {
+        next[ticker] = resolveTimelineDisplay(
+          simulation.priceTimelineBySymbol[ticker] ?? [],
+          simulationSnapshot.time,
+        );
+      }
+      return next;
+    },
+    [isHistoricSession, simulation, simulationSnapshot, trackedTickers],
+  );
+  const selectedHistoricDisplay = useMemo(
+    () =>
+      isHistoricSession
+        ? resolveTimelineDisplay(
+            simulationTimeline,
+            simulationSnapshot?.time ?? simulatedDate ?? null,
+          )
+        : null,
+    [isHistoricSession, simulatedDate, simulationSnapshot?.time, simulationTimeline],
+  );
+  const replayReadsByTicker = useMemo<Record<string, ReplayModelRead | null>>(
+    () => {
+      if (!isHistoricSession || !simulation || !simulationSnapshot) {
+        return {};
+      }
+      const next: Record<string, ReplayModelRead | null> = {};
+      for (const ticker of trackedTickers) {
+        const quoteForTicker = quotesByTicker[ticker];
+        const points = simulation.priceTimelineBySymbol[ticker] ?? [];
+        const timelineEndIso = points[points.length - 1]?.time ?? null;
+        next[ticker] = quoteForTicker
+          ? deriveReplayModelRead(
+              quoteForTicker,
+              timelineEndIso,
+              simulationSnapshot.time,
+            )
+          : null;
+      }
+      return next;
+    },
+    [isHistoricSession, quotesByTicker, simulation, simulationSnapshot, trackedTickers],
+  );
+  const trackedActionsByTicker = useMemo<Record<string, TradeRecommendation | null>>(
+    () => {
+      const next: Record<string, TradeRecommendation | null> = {};
+      for (const ticker of trackedTickers) {
+        const trackedQuote = quotesByTicker[ticker];
+        if (!trackedQuote) {
+          next[ticker] = null;
+          continue;
+        }
+
+        const replayRead = replayReadsByTicker[ticker] ?? null;
+        const trackedSignal =
+          isHistoricSession
+            ? replayRead?.signal ?? trackedQuote.signal ?? null
+            : trackedQuote.signal ?? null;
+        if (!trackedSignal) {
+          next[ticker] = null;
+          continue;
+        }
+
+        const trackedConfidence =
+          isHistoricSession
+            ? replayRead?.confidence ?? trackedQuote.confidence ?? 0
+            : trackedQuote.confidence ?? 0;
+        const trackedChangePercent =
+          isHistoricSession
+            ? historicDisplaysByTicker[ticker]?.changePercent ?? trackedQuote.changePercent ?? 0
+            : trackedQuote.changePercent ?? 0;
+        const report = newsReportsByTicker[ticker];
+
+        next[ticker] =
+          report?.recommendedAction ??
+          deriveTradeRecommendation({
+            signal: trackedSignal,
+            confidence: trackedConfidence,
+            sentiment: report?.newsSentiment ?? trackedQuote.newsSentiment ?? null,
+            changePercent: trackedChangePercent,
+          });
+      }
+      return next;
+    },
+    [
+      trackedTickers,
+      quotesByTicker,
+      replayReadsByTicker,
+      isHistoricSession,
+      historicDisplaysByTicker,
+      newsReportsByTicker,
+    ],
+  );
+  const selectedReplayRead =
+    isHistoricSession && selectedTicker
+      ? replayReadsByTicker[selectedTicker] ?? null
+      : null;
+  const displayedSignal = isHistoricSession
+    ? selectedReplayRead?.signal ?? quote?.signal ?? null
+    : quote?.signal ?? null;
+  const displayedConfidence = isHistoricSession
+    ? selectedReplayRead?.confidence ?? quote?.confidence ?? 0
+    : quote?.confidence ?? 0;
+  const displayedSelectedPrice =
+    isHistoricSession
+      ? selectedHistoricDisplay?.lastPrice ?? selectedSimPrice
+      : quote?.lastPrice ?? null;
+  const displayedSelectedChangePercent =
+    isHistoricSession
+      ? selectedHistoricDisplay?.changePercent ?? quote?.changePercent ?? 0
+      : quote?.changePercent ?? 0;
+  const selectedPriceMetricLabel = isHistoricSession ? "Replay price" : "Latest price";
+  const selectedMoveMetricLabel = isHistoricSession ? "Replay move" : "Today's move";
+  const selectedUpdateMetricLabel = isHistoricSession ? "Replay clock" : "Live update";
+  const selectedUpdateMetricValue =
+    isHistoricSession && simulationSnapshot
+      ? new Date(simulationSnapshot.time).toLocaleTimeString()
+      : lastTickAt
+        ? new Date(lastTickAt).toLocaleTimeString()
+        : "-";
+  const displayedAction = displayedSignal
+    ? newsReport?.recommendedAction ??
+      deriveTradeRecommendation({
+        signal: displayedSignal,
+        confidence: displayedConfidence,
+        sentiment: newsReport?.newsSentiment ?? quote?.newsSentiment ?? null,
+        changePercent: displayedSelectedChangePercent,
+      })
+    : null;
+  const displayedToneSignal =
+    displayedAction != null
+      ? recommendationToSignal(displayedAction)
+      : displayedSignal;
+  const showDisplayPriceLoading =
+    quotesLoading && (!isHistoricSession || displayedSelectedPrice == null);
+  const shouldShowHistoricPracticeChart =
+    isHistoricSession && Boolean(simulationSnapshot && simulationTimeline.length > 1);
 
   const simulationMarkers = useMemo(
     () =>
@@ -570,10 +1023,12 @@ export function TradePage() {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-              Live tracking
+              {isHistoricSession ? "Practice replay" : "Live tracking"}
             </p>
             <p className="mt-1 text-sm text-slate-400">
-              This page refreshes the tracked symbols automatically while the market is open.
+              {isHistoricSession
+                ? "This page now replays the tracked symbols against the simulated session clock."
+                : "This page refreshes the tracked symbols automatically while the market is open."}
             </p>
           </div>
         </div>
@@ -643,6 +1098,17 @@ export function TradePage() {
           <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {trackedTickers.map((ticker) => {
               const trackedQuote = quotesByTicker[ticker];
+              const trackedHistoricDisplay = historicDisplaysByTicker[ticker] ?? null;
+              const trackedReplayRead = replayReadsByTicker[ticker] ?? null;
+              const trackedSignal =
+                isHistoricSession
+                  ? trackedReplayRead?.signal ?? trackedQuote?.signal ?? null
+                  : trackedQuote?.signal ?? null;
+              const trackedConfidence =
+                isHistoricSession
+                  ? trackedReplayRead?.confidence ?? trackedQuote?.confidence
+                  : trackedQuote?.confidence;
+              const trackedAction = trackedActionsByTicker[ticker] ?? null;
               const isSelected = ticker === selectedTicker;
               return (
                 <div
@@ -661,21 +1127,47 @@ export function TradePage() {
                     <StockCard
                       quote={trackedQuote}
                       ticker={ticker}
+                      lastPrice={
+                        isHistoricSession
+                          ? trackedHistoricDisplay?.lastPrice
+                          : undefined
+                      }
+                      changePercent={
+                        isHistoricSession
+                          ? trackedHistoricDisplay?.changePercent
+                          : undefined
+                      }
                       compact
-                      isPriceLoading={quotesLoading}
+                      isPriceLoading={
+                        quotesLoading &&
+                        (!isHistoricSession || trackedHistoricDisplay == null)
+                      }
                     />
                   </button>
                   <div className="mt-3 flex items-center justify-between gap-2">
                     <div className="min-w-0">
-                      {trackedQuote?.signal ? (
+                      {trackedAction ? (
                         <span
                           className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
-                            SIGNAL_BADGES[trackedQuote.signal]
+                            RECOMMENDATION_BADGES[trackedAction]
                           }`}
                         >
-                          {SIGNAL_LABELS[trackedQuote.signal]}
+                          {RECOMMENDATION_LABELS[trackedAction]}
                           {isAdvancedView
-                            ? ` • ${trackedQuote.confidence?.toFixed(1) ?? "-"}%`
+                            ? ` • ${
+                                trackedConfidence?.toFixed(1) ?? "-"
+                              }%`
+                            : ""}
+                        </span>
+                      ) : trackedSignal ? (
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
+                            SIGNAL_BADGES[trackedSignal]
+                          }`}
+                        >
+                          {SIGNAL_LABELS[trackedSignal]}
+                          {isAdvancedView
+                            ? ` • ${trackedConfidence?.toFixed(1) ?? "-"}%`
                             : ""}
                         </span>
                       ) : (
@@ -709,7 +1201,14 @@ export function TradePage() {
       {quote ? (
         <section className="grid gap-4 xl:grid-cols-[20rem_minmax(0,1fr)]">
           <div className="flex flex-col gap-4">
-            <StockCard quote={quote} isPriceLoading={quotesLoading} />
+            <StockCard
+              quote={quote}
+              lastPrice={isHistoricSession ? displayedSelectedPrice ?? undefined : undefined}
+              changePercent={
+                isHistoricSession ? displayedSelectedChangePercent : undefined
+              }
+              isPriceLoading={showDisplayPriceLoading}
+            />
 
             {tradeMode === "manual" ? (
               <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-4 shadow-lg shadow-slate-950/20">
@@ -879,7 +1378,7 @@ export function TradePage() {
           </div>
 
           <div className="flex flex-col gap-4">
-            {quote.signal ? (
+            {displayedSignal ? (
               <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-4 shadow-lg shadow-slate-950/20">
                 <div className="flex items-center justify-between gap-3">
                   <div>
@@ -891,20 +1390,22 @@ export function TradePage() {
                       seen.
                     </p>
                   </div>
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${
-                      SIGNAL_BADGES[quote.signal]
-                    }`}
-                  >
-                    {SIGNAL_LABELS[quote.signal]}
-                  </span>
+                  {displayedAction ? (
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${
+                        RECOMMENDATION_BADGES[displayedAction]
+                      }`}
+                    >
+                      {RECOMMENDATION_LABELS[displayedAction]}
+                    </span>
+                  ) : null}
                 </div>
 
                 {isAdvancedView ? (
                   <>
                     <ConfidenceMeter
-                      confidence={quote.confidence ?? 0}
-                      signal={quote.signal}
+                      confidence={displayedConfidence}
+                      signal={displayedToneSignal ?? displayedSignal}
                     />
                     <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-2">
                     <div>
@@ -918,40 +1419,42 @@ export function TradePage() {
                     </div>
                     <div>
                       <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500">
-                        Latest price
+                        {selectedPriceMetricLabel}
                         <InfoHint label="The most recent price the page has for this stock." />
                       </dt>
                       <dd className="mt-1 font-semibold text-white">
-                        {quotesLoading ? (
+                        {showDisplayPriceLoading ? (
                           <QuotePriceLoadingLabel />
+                        ) : displayedSelectedPrice == null ? (
+                          "-"
                         ) : (
-                          `$${quote.lastPrice.toFixed(2)}`
+                          `$${displayedSelectedPrice.toFixed(2)}`
                         )}
                       </dd>
                     </div>
                     <div>
                       <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500">
-                        Today&apos;s move
+                        {selectedMoveMetricLabel}
                         <InfoHint label="This shows how much the price has moved in percentage terms over the latest visible window." />
                       </dt>
                       <dd className="mt-1 font-semibold text-white">
-                        {quotesLoading ? (
+                        {showDisplayPriceLoading ? (
                           <QuotePriceLoadingLabel />
                         ) : (
                           <>
-                            {quote.changePercent >= 0 ? "+" : ""}
-                            {quote.changePercent.toFixed(2)}%
+                            {displayedSelectedChangePercent >= 0 ? "+" : ""}
+                            {displayedSelectedChangePercent.toFixed(2)}%
                           </>
                         )}
                       </dd>
                     </div>
                     <div>
                       <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500">
-                        Live update
+                        {selectedUpdateMetricLabel}
                         <InfoHint label="This is the time of the last live price update from the streaming feed." />
                       </dt>
                       <dd className="mt-1 font-semibold text-white">
-                        {lastTickAt ? new Date(lastTickAt).toLocaleTimeString() : "-"}
+                        {selectedUpdateMetricValue}
                       </dd>
                     </div>
                     </dl>
@@ -959,11 +1462,11 @@ export function TradePage() {
                 ) : (
                   <>
                     <ConfidenceMeter
-                      confidence={quote.confidence ?? 0}
-                      signal={quote.signal}
+                      confidence={displayedConfidence}
+                      signal={displayedToneSignal ?? displayedSignal}
                     />
                     <p className="mt-3 text-sm leading-6 text-slate-300">
-                      Quick take: TradeWise currently leans {SIGNAL_LABELS[quote.signal].toLowerCase()} on {quote.ticker}. Switch to Advanced view for more timing and market context.
+                      Quick take: TradeWise currently favors {recommendationPhrase(displayedAction ?? "hold")} on {quote.ticker}. Switch to Advanced view for more timing and market context.
                     </p>
                   </>
                 )}
@@ -987,7 +1490,7 @@ export function TradePage() {
                     </div>
                   </div>
                   <p className="mt-3 text-sm leading-6 text-slate-300">
-                    {quotesLoading ? (
+                    {showDisplayPriceLoading ? (
                       <span className="inline-flex flex-wrap items-center gap-2">
                         <QuotePriceLoadingLabel className="text-indigo-200" />
                         <span className="text-slate-500">
@@ -996,13 +1499,13 @@ export function TradePage() {
                       </span>
                     ) : (
                       <>
-                        Quick take: TradeWise currently leans{" "}
-                        {SIGNAL_LABELS[quote.signal].toLowerCase()} on {quote.ticker}. Switch to
+                        Quick take: TradeWise currently favors{" "}
+                        {recommendationPhrase(displayedAction ?? "hold")} on {quote.ticker}. Switch to
                         Advanced view for confidence and timing metrics.
                       </>
                     )}
                     {tradeDecisionExplanation
-                      ?? `TradeWise is waiting for a cleaner signal on ${quote.ticker}. Refresh the live news report to load the latest buy, sell, or wait explanation.`}
+                      ?? `TradeWise would ${displayedAction ?? "hold"} ${quote.ticker} based on the latest signal, confidence, and news mix. Refresh the live news report to load the latest buy, sell, or hold explanation.`}
                   </p>
                 </div>
 
@@ -1017,7 +1520,17 @@ export function TradePage() {
               </section>
             ) : null}
 
-            {quotesLoading ? (
+            {shouldShowHistoricPracticeChart && simulationSnapshot ? (
+              <LiveLineChart
+                points={simulationTimeline}
+                ticker={selectedSimPriceSymbol}
+                title="Practice session timeline"
+                subtitle={`Historical replay reveals the last ${historicReplayWindowHours} hours as the simulated clock advances.`}
+                currentTime={simulationSnapshot.time}
+                revealUntilTime={simulationSnapshot.time}
+                markers={simulationMarkers}
+              />
+            ) : quotesLoading ? (
               <section className="flex min-h-[220px] flex-col items-center justify-center gap-2 rounded-3xl border border-slate-800 bg-slate-950/60 p-6 shadow-lg shadow-slate-950/20">
                 <QuotePriceLoadingLabel className="text-sm font-medium text-indigo-200" />
                 <p className="text-center text-xs text-slate-500">
@@ -1083,12 +1596,12 @@ export function TradePage() {
                       Current price
                     </dt>
                     <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
-                      {quotesLoading ? (
+                      {showDisplayPriceLoading ? (
                         <QuotePriceLoadingLabel className="text-zinc-500 dark:text-zinc-400" />
-                      ) : selectedSimPrice == null ? (
+                      ) : displayedSelectedPrice == null ? (
                         "-"
                       ) : (
-                        `$${selectedSimPrice.toFixed(2)}`
+                        `$${displayedSelectedPrice.toFixed(2)}`
                       )}
                     </dd>
                   </div>
@@ -1109,16 +1622,19 @@ export function TradePage() {
                     </dd>
                   </div>
                 </dl>
-                <div className="mt-4">
-                  <LiveLineChart
-                    points={simulationTimeline}
-                    ticker={selectedSimPriceSymbol}
-                    title="Simulation timeline"
-                    subtitle="The dashed cursor shows the exact replay moment for the selected stock."
-                    currentTime={simulationSnapshot.time}
-                    markers={simulationMarkers}
-                  />
-                </div>
+                {!isHistoricSession ? (
+                  <div className="mt-4">
+                    <LiveLineChart
+                      points={simulationTimeline}
+                      ticker={selectedSimPriceSymbol}
+                      title="Simulation timeline"
+                      subtitle="The dashed cursor shows the exact replay moment for the selected stock."
+                      currentTime={simulationSnapshot.time}
+                      revealUntilTime={simulationSnapshot.time}
+                      markers={simulationMarkers}
+                    />
+                  </div>
+                ) : null}
                 <div className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50/70 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/60">
                   <p className="text-xs uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
                     Positions

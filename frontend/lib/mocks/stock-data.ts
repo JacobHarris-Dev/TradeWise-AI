@@ -28,6 +28,8 @@ export type MockQuote = {
   modelVersion?: string;
   selectedModelProfile?: ModelProfile | null;
   selectedChartType?: ChartType;
+  marketDataProvider?: "yfinance" | "alpaca" | null;
+  marketDataInterval?: string | null;
   history?: number[];
   technicals?: QuoteTechnicals;
   chartDataUri?: string | null;
@@ -161,6 +163,7 @@ export type NewsReport = {
   report: string;
   studentReasoning?: string | null;
   reasoningSource?: "qwen" | "template" | "remote-llm";
+  recommendedAction?: "buy" | "sell" | "hold";
   signal: TradeSignal;
   confidence: number;
   modelVersion: string;
