@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo } from "react";
 import { ChevronRight, TrendingUp, Wallet } from "lucide-react";
 import { InvestmentChatBubble } from "@/components/dashboard/investment-chat-bubble";
 import { useAuth } from "@/components/providers/auth-provider";
 import { usePortfolioWorkspace, useTradeWorkspace } from "@/components/providers/trade-workspace-provider";
 import { TradeMarketNews } from "@/components/trade/trade-market-news";
+import { buildLivePortfolioPerformanceEstimate } from "@/lib/trade-workspace";
 
 function formatMoney(value: number) {
   return value.toLocaleString(undefined, {
@@ -17,11 +19,31 @@ function formatMoney(value: number) {
 export function DashboardPage() {
   const { user, loading: authLoading } = useAuth();
   const { portfolio } = usePortfolioWorkspace();
-  const { trackedTickers, simulationSnapshot, tradingTimeMode, paperAccount } =
+  const {
+    trackedTickers,
+    simulationSnapshot,
+    tradingTimeMode,
+    paperAccount,
+    quotesByTicker,
+  } =
     useTradeWorkspace();
 
   const useHistoricSim =
     tradingTimeMode === "historic" && simulationSnapshot != null;
+  const livePortfolioEstimate = useMemo(
+    () =>
+      tradingTimeMode === "live"
+        ? buildLivePortfolioPerformanceEstimate({
+            paperAccount,
+            quotesByTicker,
+            fallbackPortfolio: portfolio,
+          })
+        : null,
+    [paperAccount, portfolio, quotesByTicker, tradingTimeMode],
+  );
+  const livePortfolio = useHistoricSim
+    ? null
+    : livePortfolioEstimate ?? portfolio;
 
   const welcomeLine = (() => {
     if (authLoading) return "Welcome back";
@@ -31,19 +53,19 @@ export function DashboardPage() {
 
   const holdingsValue = useHistoricSim
     ? simulationSnapshot.portfolioValue - simulationSnapshot.cash
-    : portfolio?.positionsValue ?? 0;
+    : livePortfolio?.positionsValue ?? 0;
   const totalEquity = useHistoricSim
     ? simulationSnapshot.portfolioValue
-    : portfolio?.totalEquity ?? portfolio?.cash ?? paperAccount?.cash ?? 0;
+    : livePortfolio?.totalEquity ?? livePortfolio?.cash ?? paperAccount?.cash ?? 0;
   const buyingPower = useHistoricSim
     ? simulationSnapshot.cash
-    : portfolio?.cash ?? paperAccount?.cash ?? 0;
+    : livePortfolio?.cash ?? paperAccount?.cash ?? 0;
   const activePositions = useHistoricSim
     ? simulationSnapshot.positions.length
-    : portfolio?.positions.length ?? paperAccount?.positions.length ?? 0;
+    : livePortfolio?.positions.length ?? paperAccount?.positions.length ?? 0;
   const baselineEquity = useHistoricSim
     ? 10_000
-    : portfolio?.baselineEquity ?? portfolio?.startingCash ?? 10000;
+    : livePortfolio?.baselineEquity ?? livePortfolio?.startingCash ?? 10000;
   const totalReturn = totalEquity - baselineEquity;
 
   return (

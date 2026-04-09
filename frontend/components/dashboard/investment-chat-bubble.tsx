@@ -310,6 +310,17 @@ export function InvestmentChatBubble({
 
     try {
       const parsed = parsePrompt(rawPrompt);
+      const accountUserId = user?.uid ?? "guest";
+      const refreshCadence = readStoredRefreshCadence();
+      const newsRefreshSeconds =
+        refreshCadence === "15m" ? 900 : refreshCadence === "5m" ? 300 : 60;
+      const chatPromise = fetchInvestmentChatResponse({
+        prompt: rawPrompt,
+        modelProfile: parsed.modelProfile,
+        sectors: parsed.sectors,
+        trackedTickers: parsed.explicitTickers,
+      });
+      const paperAccountPromise = fetchPaperAccount(accountUserId);
       const resolvedMatches = await resolveStockUniverseQuery(rawPrompt, {
         count: MAX_TRACKED_TICKERS,
       });
@@ -330,18 +341,8 @@ export function InvestmentChatBubble({
 
       const trackedTickers = rankedQuotes.map((quote) => quote.ticker);
       const selectedTicker = trackedTickers[0] ?? "";
-      const accountUserId = user?.uid ?? "guest";
-      const refreshCadence = readStoredRefreshCadence();
-      const newsRefreshSeconds =
-        refreshCadence === "15m" ? 900 : refreshCadence === "5m" ? 300 : 60;
-      const chatPromise = fetchInvestmentChatResponse({
-        prompt: rawPrompt,
-        modelProfile: parsed.modelProfile,
-        sectors: resolvedSectors,
-        trackedTickers,
-      });
       const sideDataPromise = Promise.allSettled([
-        fetchPaperAccount(accountUserId),
+        paperAccountPromise,
         selectedTicker
           ? fetchNewsReport(selectedTicker, {
               modelProfile: parsed.modelProfile,

@@ -7,11 +7,11 @@ for detecting performance regressions.
 Run with: pytest backend/tests/test_performance.py -v -s
 """
 
-import asyncio
+import os
 import time
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import pytest
 
 # Performance thresholds (in seconds)
@@ -31,9 +31,9 @@ class TestPerformanceOllama:
     @pytest.mark.benchmark
     def test_ollama_model_discovery_timing(self):
         """Measure time to discover available Ollama models via /api/tags."""
-        from tradewise_backend.news_reasoning import _ollama_available_models
+        from tradewise_backend import news_reasoning
 
-        with patch("httpx.get") as mock_get:
+        with patch.object(news_reasoning._REMOTE_LLM_CLIENT, "get") as mock_get:
             # Mock Ollama /api/tags response
             mock_response = MagicMock()
             mock_response.json.return_value = {
@@ -46,7 +46,7 @@ class TestPerformanceOllama:
             mock_get.return_value = mock_response
 
             start = time.perf_counter()
-            models = _ollama_available_models()
+            models = news_reasoning._ollama_available_models()
             elapsed = time.perf_counter() - start
 
             assert len(models) == 3
@@ -64,10 +64,10 @@ class TestPerformanceOllama:
             "tradewise_backend.news_reasoning._ollama_available_models"
         ) as mock_models:
             mock_models.return_value = [
-                "qwen2.5:7b",
-                "qwen2.5:1.5b",
-                "llama2:13b",
-                "mistral:7b",
+                {"name": "qwen2.5:7b", "size": 4_700_000_000},
+                {"name": "qwen2.5:1.5b", "size": 1_000_000_000},
+                {"name": "llama2:13b", "size": 7_300_000_000},
+                {"name": "mistral:7b", "size": 4_000_000_000},
             ]
 
             start = time.perf_counter()
@@ -87,26 +87,32 @@ class TestPerformanceNewsReasoning:
     @pytest.mark.benchmark
     def test_template_reasoning_speed(self):
         """Template-based reasoning should be near-instant."""
-        from tradewise_backend.news_reasoning import (
-            ReasoningContext,
-            reason_about_news,
-        )
+        from tradewise_backend.news_reasoning import build_student_news_reasoning
 
-        context = ReasoningContext(
-            news_items=[
-                {
-                    "headline": "Apple beats earnings estimates",
-                    "source": "Reuters",
-                }
-            ],
-            portfolio_context="Tech-heavy portfolio",
-            session_id="test-session",
-        )
-
-        # Force template mode by using invalid model path
-        with patch.dict("os.environ", {"ML_QWEN_LOCAL_ARTIFACT_PATH": "/invalid"}):
+        # Force template mode by disabling the remote LLM and local Qwen path.
+        with patch.dict(
+            os.environ,
+            {
+                "ML_QWEN_REMOTE_BASE_URL": "",
+                "ML_NEWS_REPORT_USE_QWEN": "false",
+                "ML_QWEN_LOCAL_ONLY": "true",
+            },
+            clear=False,
+        ):
             start = time.perf_counter()
-            result = reason_about_news(context)
+            result = build_student_news_reasoning(
+                ticker="AAPL",
+                signal="neutral",
+                confidence=52.0,
+                sentiment="neutral",
+                change_percent=0.2,
+                momentum=0.001,
+                short_moving_average=100.0,
+                long_moving_average=100.5,
+                topics=["earnings"],
+                headlines=["Apple beats earnings estimates"],
+                force_refresh=True,
+            )
             elapsed = time.perf_counter() - start
 
             assert result.source == "template"
@@ -116,28 +122,51 @@ class TestPerformanceNewsReasoning:
             print(f"✓ Template reasoning: {elapsed:.4f}s")
 
     @pytest.mark.benchmark
-    async def test_news_reasoning_cache_hit_speed(self):
+    def test_news_reasoning_cache_hit_speed(self):
         """Cached reasoning should be faster than first computation."""
-        from tradewise_backend.news_reasoning import (
-            ReasoningContext,
-            reason_about_news,
-        )
+        from tradewise_backend.news_reasoning import build_student_news_reasoning
 
-        context = ReasoningContext(
-            news_items=[{"headline": "Market rally continues", "source": "Bloomberg"}],
-            portfolio_context="Balanced portfolio",
-            session_id="test-session-cache",
-        )
-
-        # First call (cache miss)
-        with patch.dict("os.environ", {"ML_QWEN_LOCAL_ARTIFACT_PATH": "/invalid"}):
+        with patch.dict(
+            os.environ,
+            {
+                "ML_QWEN_REMOTE_BASE_URL": "",
+                "ML_NEWS_REPORT_USE_QWEN": "false",
+                "ML_QWEN_LOCAL_ONLY": "true",
+                "ML_NEWS_REASONING_CACHE_SECONDS": "120",
+            },
+            clear=False,
+        ):
+            # First call (cache miss)
             start1 = time.perf_counter()
-            result1 = reason_about_news(context)
+            result1 = build_student_news_reasoning(
+                ticker="MSFT",
+                signal="neutral",
+                confidence=51.0,
+                sentiment="neutral",
+                change_percent=0.1,
+                momentum=0.0005,
+                short_moving_average=98.0,
+                long_moving_average=98.5,
+                topics=["macro"],
+                headlines=["Market rally continues"],
+                force_refresh=True,
+            )
             elapsed1 = time.perf_counter() - start1
 
             # Second call (cache hit)
             start2 = time.perf_counter()
-            result2 = reason_about_news(context)
+            result2 = build_student_news_reasoning(
+                ticker="MSFT",
+                signal="neutral",
+                confidence=51.0,
+                sentiment="neutral",
+                change_percent=0.1,
+                momentum=0.0005,
+                short_moving_average=98.0,
+                long_moving_average=98.5,
+                topics=["macro"],
+                headlines=["Market rally continues"],
+            )
             elapsed2 = time.perf_counter() - start2
 
             # Cache hit should be significantly faster
@@ -154,12 +183,10 @@ class TestPerformanceStockUniverse:
     @pytest.mark.benchmark
     def test_stock_lookup_speed(self):
         """Stock ticker lookup should be sub-second."""
-        from tradewise_backend.stock_universe import StockUniverse
-
-        universe = StockUniverse()
+        from tradewise_backend.stock_universe import resolve_stock_universe_matches
 
         start = time.perf_counter()
-        results = universe.lookup("AAPL")
+        results = resolve_stock_universe_matches("AAPL")
         elapsed = time.perf_counter() - start
 
         assert len(results) > 0
@@ -171,12 +198,10 @@ class TestPerformanceStockUniverse:
     @pytest.mark.benchmark
     def test_company_name_lookup_speed(self):
         """Company name lookup should handle multiple matches quickly."""
-        from tradewise_backend.stock_universe import StockUniverse
-
-        universe = StockUniverse()
+        from tradewise_backend.stock_universe import resolve_stock_universe_matches
 
         start = time.perf_counter()
-        results = universe.lookup("Apple")
+        results = resolve_stock_universe_matches("Apple")
         elapsed = time.perf_counter() - start
 
         assert len(results) > 0
@@ -192,31 +217,24 @@ class TestPerformanceMarketData:
     @pytest.mark.benchmark
     def test_market_data_parse_speed(self):
         """Market data parsing should be fast for batch operations."""
-        from tradewise_backend.market_data import parse_market_data
+        from tradewise_backend.market_data import _normalize_history_frame
 
-        # Sample market data structure
-        sample_data = {
-            "AAPL": {
-                "c": 150.25,
-                "h": 151.50,
-                "l": 149.75,
-                "o": 150.00,
-                "t": 1704067200,
-                "v": 52_000_000,
+        sample_data = pd.DataFrame(
+            {
+                "Open": [150.0, 150.5, 151.0],
+                "High": [151.5, 152.0, 152.5],
+                "Low": [149.7, 150.2, 150.8],
+                "Close": [150.25, 151.0, 152.1],
+                "Volume": [52_000_000, 48_000_000, 50_000_000],
             },
-            "MSFT": {
-                "c": 370.50,
-                "h": 372.00,
-                "l": 369.00,
-                "o": 370.00,
-                "t": 1704067200,
-                "v": 38_000_000,
-            },
-        }
+            index=pd.to_datetime(
+                ["2024-01-01T14:30:00Z", "2024-01-02T14:30:00Z", "2024-01-03T14:30:00Z"]
+            ),
+        )
 
         start = time.perf_counter()
         for _ in range(100):  # Parse 100 records
-            result = parse_market_data(sample_data)
+            result = _normalize_history_frame(sample_data, "AAPL")
         elapsed = time.perf_counter() - start
 
         avg_time = elapsed / 100
@@ -240,7 +258,8 @@ class TestPerformanceLiveStream:
             "symbol": "AAPL",
             "price": 150.25,
             "size": 100,
-            "timestamp": 1704067200000,
+            "timestamp": "2024-01-01T14:30:00Z",
+            "feed": "iex",
         }
 
         start = time.perf_counter()

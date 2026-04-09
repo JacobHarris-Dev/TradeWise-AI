@@ -16,16 +16,18 @@ set -e
 
 BASELINE_FILE="${1:-.performance-baseline.json}"
 CURRENT_FILE=".performance-current.json"
-BACKEND_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+BACKEND_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 cd "$BACKEND_DIR"
+export PYTHONPATH="src${PYTHONPATH:+:$PYTHONPATH}"
 
 echo "🏃 Running performance benchmarks..."
-python -m pytest tests/test_performance.py -v -s --tb=short -m benchmark 2>&1 | tee benchmark.log
+"$PYTHON_BIN" -m pytest tests/test_performance.py -v -s --tb=short -m benchmark 2>&1 | tee benchmark.log
 
 echo ""
 echo "📊 Saving performance trace..."
-python -c "
-from src.tradewise_backend.performance import save_performance_trace, get_performance_report
+"$PYTHON_BIN" -c "
+from tradewise_backend.performance import save_performance_trace, get_performance_report
 print(get_performance_report())
 save_performance_trace('$CURRENT_FILE')
 "
@@ -41,8 +43,8 @@ fi
 
 echo ""
 echo "🔍 Comparing with baseline..."
-python -c "
-from src.tradewise_backend.performance import compare_performance_traces, print_comparison_report
+"$PYTHON_BIN" -c "
+from tradewise_backend.performance import compare_performance_traces, print_comparison_report
 comparison = compare_performance_traces('$BASELINE_FILE', '$CURRENT_FILE')
 print_comparison_report(comparison)
 

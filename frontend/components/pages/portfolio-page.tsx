@@ -18,6 +18,7 @@ import { usePortfolioWorkspace, useTradeWorkspace } from "@/components/providers
 import { Line, LineChart as RechartsLineChart, ResponsiveContainer, YAxis } from "recharts";
 import type { MockQuote } from "@/lib/mocks/stock-data";
 import { fetchStockQuotes } from "@/lib/stock-quote";
+import { buildLivePortfolioPerformanceEstimate } from "@/lib/trade-workspace";
 
 const PortfolioAllocationChart = dynamic(
   () =>
@@ -61,6 +62,8 @@ export function PortfolioPage() {
     simulatedDate,
     trackedTickers,
     paperTradeLog,
+    quotesByTicker,
+    paperAccount,
   } = useTradeWorkspace();
   const simulatedDateRef = useRef(simulatedDate);
   simulatedDateRef.current = simulatedDate;
@@ -85,6 +88,22 @@ export function PortfolioPage() {
         Math.abs(simulationSnapshot.cash - 10_000) > 0.001
       ),
   );
+  const livePortfolioEstimate = useMemo(
+    () =>
+      tradingTimeMode === "live"
+        ? buildLivePortfolioPerformanceEstimate({
+            paperAccount,
+            quotesByTicker,
+            fallbackPortfolio: portfolio,
+          })
+        : null,
+    [paperAccount, portfolio, quotesByTicker, tradingTimeMode],
+  );
+  const livePortfolio = useHistoricSim
+    ? null
+    : livePortfolioEstimate ?? portfolio;
+  const showPortfolioLoading = !useHistoricSim && !livePortfolio && loading;
+  const showPortfolioError = !useHistoricSim && !livePortfolio && error;
 
   const positionRows = useMemo<PortfolioPositionRow[]>(() => {
     if (simulation && simulationSnapshot && usesSimulationPortfolio) {
@@ -133,7 +152,7 @@ export function PortfolioPage() {
       });
     }
 
-    return (portfolio?.positions ?? []).map((position) => ({
+    return (livePortfolio?.positions ?? []).map((position) => ({
       ticker: position.ticker,
       shares: position.shares,
       avgEntryPrice: position.avgEntryPrice,
@@ -144,24 +163,24 @@ export function PortfolioPage() {
           ? ((position.currentPrice - position.avgEntryPrice) / position.avgEntryPrice) * 100
           : 0,
     }));
-  }, [portfolio, simulation, simulationSnapshot, usesSimulationPortfolio]);
+  }, [livePortfolio, simulation, simulationSnapshot, usesSimulationPortfolio]);
 
   const cashValue =
     usesSimulationPortfolio && simulationSnapshot
       ? simulationSnapshot.cash
-      : portfolio?.cash ?? 0;
+      : livePortfolio?.cash ?? 0;
   const positionsValue =
     usesSimulationPortfolio && simulationSnapshot
       ? simulationSnapshot.portfolioValue - simulationSnapshot.cash
-      : portfolio?.positionsValue ?? 0;
+      : livePortfolio?.positionsValue ?? 0;
   const totalEquityValue =
     usesSimulationPortfolio && simulationSnapshot
       ? simulationSnapshot.portfolioValue
-      : portfolio?.totalEquity ?? 0;
+      : livePortfolio?.totalEquity ?? 0;
   const baselineEquity = usesSimulationPortfolio
     ? 10_000
-    : portfolio?.baselineEquity ?? portfolio?.startingCash ?? 10000;
-  const totalEquity = totalEquityValue || portfolio?.cash || 0;
+    : livePortfolio?.baselineEquity ?? livePortfolio?.startingCash ?? 10000;
+  const totalEquity = totalEquityValue || livePortfolio?.cash || 0;
   const totalReturn = totalEquity - baselineEquity;
   const totalReturnPercent =
     baselineEquity > 0 ? (totalReturn / baselineEquity) * 100 : 0;
@@ -180,7 +199,7 @@ export function PortfolioPage() {
         })),
       ];
     }
-    if (!portfolio) {
+    if (!livePortfolio) {
       return [];
     }
 
@@ -190,12 +209,12 @@ export function PortfolioPage() {
       shares: position.shares,
     }));
 
-    if (portfolio.cash > 0) {
-      rows.unshift({ ticker: "Cash", value: portfolio.cash });
+    if (livePortfolio.cash > 0) {
+      rows.unshift({ ticker: "Cash", value: livePortfolio.cash });
     }
 
     return rows;
-  }, [portfolio, positionRows, simulationSnapshot, usesSimulationPortfolio]);
+  }, [livePortfolio, positionRows, simulationSnapshot, usesSimulationPortfolio]);
 
   const featuredSymbols = useMemo(() => {
     return Array.from(
@@ -383,17 +402,17 @@ export function PortfolioPage() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
-          <PortfolioGrowthChart
-            totalValue={
-              useHistoricSim
-                ? simulationSnapshot.portfolioValue
-                : portfolio?.totalEquity ?? portfolio?.cash ?? 0
-            }
-            title="Total paper account value"
-            points={useHistoricSim ? undefined : portfolio?.points}
-            dayChange={useHistoricSim ? undefined : portfolio?.dayChange}
-            dayChangePercent={useHistoricSim ? undefined : portfolio?.dayChangePercent}
-            updatedAt={useHistoricSim ? simulationSnapshot.time : portfolio?.updatedAt}
+            <PortfolioGrowthChart
+              totalValue={
+                useHistoricSim
+                  ? simulationSnapshot.portfolioValue
+                  : livePortfolio?.totalEquity ?? livePortfolio?.cash ?? 0
+              }
+              title="Total paper account value"
+              points={useHistoricSim ? undefined : livePortfolio?.points}
+            dayChange={useHistoricSim ? undefined : livePortfolio?.dayChange}
+            dayChangePercent={useHistoricSim ? undefined : livePortfolio?.dayChangePercent}
+            updatedAt={useHistoricSim ? simulationSnapshot.time : livePortfolio?.updatedAt}
           />
 
           <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-sm">
@@ -415,14 +434,14 @@ export function PortfolioPage() {
               </div>
             </div>
 
-            {error ? (
+            {showPortfolioError ? (
               <p className="px-6 pt-4 text-sm text-rose-400">{error}</p>
             ) : null}
-            {loading ? (
+            {showPortfolioLoading ? (
               <p className="px-6 py-6 text-sm text-slate-500">Loading portfolio...</p>
             ) : null}
 
-            {!loading && positionRows.length === 0 ? (
+            {!showPortfolioLoading && positionRows.length === 0 ? (
               <div className="flex flex-col items-center p-12 text-center">
                 <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-slate-800 text-slate-500">
                   <LineChart className="h-8 w-8" />
@@ -443,7 +462,7 @@ export function PortfolioPage() {
               </div>
             ) : null}
 
-            {!loading && positionRows.length > 0 ? (
+            {!showPortfolioLoading && positionRows.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse text-left">
                   <thead>

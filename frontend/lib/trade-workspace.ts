@@ -3,6 +3,8 @@ import type {
   MockQuote,
   NewsReport,
   PaperAccount,
+  PaperAccountPerformance,
+  PaperAccountPerformancePosition,
   ModelProfile,
   RefreshCadence,
 } from "@/lib/mocks/stock-data";
@@ -288,6 +290,87 @@ export function buildQuoteMap(quotes: MockQuote[]) {
     next[quote.ticker] = quote;
   }
   return next;
+}
+
+export function buildLivePortfolioPerformanceEstimate(options: {
+  paperAccount: PaperAccount | null;
+  quotesByTicker: Record<string, MockQuote>;
+  fallbackPortfolio?: PaperAccountPerformance | null;
+}): PaperAccountPerformance | null {
+  const { paperAccount, quotesByTicker, fallbackPortfolio = null } = options;
+  if (!paperAccount) {
+    return fallbackPortfolio;
+  }
+
+  const fallbackPositionsByTicker = new Map(
+    (fallbackPortfolio?.positions ?? []).map((position) => [
+      position.ticker,
+      position,
+    ]),
+  );
+
+  const positions: PaperAccountPerformancePosition[] = paperAccount.positions.map(
+    (position) => {
+      const quote = quotesByTicker[position.ticker];
+      const fallbackPosition = fallbackPositionsByTicker.get(position.ticker);
+      const currentPrice =
+        quote?.lastPrice ??
+        fallbackPosition?.currentPrice ??
+        position.avgEntryPrice;
+      const marketValue = Number((currentPrice * position.shares).toFixed(2));
+      const changePercent =
+        position.avgEntryPrice > 0
+          ? Number(
+              (
+                ((currentPrice - position.avgEntryPrice) / position.avgEntryPrice) *
+                100
+              ).toFixed(2),
+            )
+          : fallbackPosition?.changePercent ?? 0;
+
+      return {
+        ticker: position.ticker,
+        companyName:
+          quote?.companyName ??
+          fallbackPosition?.companyName ??
+          position.ticker,
+        shares: position.shares,
+        avgEntryPrice: position.avgEntryPrice,
+        currentPrice,
+        marketValue,
+        changePercent,
+      };
+    },
+  );
+
+  const cash = Number(paperAccount.cash.toFixed(2));
+  const positionsValue = Number(
+    positions.reduce((sum, position) => sum + position.marketValue, 0).toFixed(2),
+  );
+  const totalEquity = Number((cash + positionsValue).toFixed(2));
+  const baselineEquity =
+    fallbackPortfolio?.baselineEquity ?? paperAccount.startingCash;
+  const dayChange = Number((totalEquity - baselineEquity).toFixed(2));
+  const dayChangePercent =
+    baselineEquity > 0
+      ? Number(((dayChange / baselineEquity) * 100).toFixed(2))
+      : 0;
+
+  return {
+    userId: paperAccount.userId,
+    startingCash: paperAccount.startingCash,
+    cash,
+    positionsValue,
+    totalEquity,
+    dayChange,
+    dayChangePercent,
+    baselineEquity,
+    positions,
+    points: fallbackPortfolio?.points ?? [],
+    coachSummary: fallbackPortfolio?.coachSummary ?? null,
+    coachSource: fallbackPortfolio?.coachSource ?? null,
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 export function readStoredModelProfile(): ModelProfile {

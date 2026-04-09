@@ -8,7 +8,6 @@ import {
   ResponsiveContainer,
   Tooltip,
 } from "recharts";
-import { getPortfolioPositions } from "@/lib/mocks/portfolio-demo";
 
 const COLORS = ["#059669", "#2563eb", "#7c3aed", "#d97706", "#db2777", "#0891b2"];
 
@@ -63,11 +62,10 @@ export function PortfolioAllocationChart({
   description = "Hover a slice to see share of your portfolio",
   totalEquity,
 }: PortfolioAllocationChartProps) {
-  const demoPositions = useMemo(() => getPortfolioPositions(), []);
   const sourceRows = useMemo(() => {
-    const source = positions ?? demoPositions;
+    const source = positions ?? [];
     return source.filter((row) => row.value > 0);
-  }, [demoPositions, positions]);
+  }, [positions]);
   const data: PieDatum[] = useMemo(
     () => {
       const total = sourceRows.reduce((sum, row) => sum + row.value, 0);
