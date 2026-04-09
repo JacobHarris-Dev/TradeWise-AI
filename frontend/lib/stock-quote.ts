@@ -17,6 +17,22 @@ import type {
   WatchSession,
 } from "@/lib/mocks/stock-data";
 
+async function fetchWithNetworkGuard(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (e) {
+    if (e instanceof TypeError) {
+      throw new Error(
+        "Network error: could not reach the API. Start the Next dev server and ensure the ML backend is running and reachable from the proxy.",
+      );
+    }
+    throw e;
+  }
+}
+
 /**
  * Browser-facing entry point for live quote data.
  * The request goes through the same-origin Next route handler, which proxies to Python.
@@ -26,6 +42,8 @@ export async function fetchStockQuote(
   options: {
     includeChart?: boolean;
     modelProfile?: ModelProfile;
+    /** ISO-8601 end time for historical bars (same `/v1/quote` API as live). */
+    asOf?: string;
   } = {},
 ): Promise<MockQuote> {
   const normalized = ticker.trim().toUpperCase();
@@ -40,10 +58,14 @@ export async function fetchStockQuote(
   if (options.modelProfile) {
     params.set("modelProfile", options.modelProfile);
   }
+  if (options.asOf) {
+    params.set("asOf", options.asOf);
+  }
 
-  const response = await fetch(`/api/ml/quote?${params.toString()}`, {
-    cache: "no-store",
-  });
+  const response = await fetchWithNetworkGuard(
+    `/api/ml/quote?${params.toString()}`,
+    { cache: "no-store" },
+  );
 
   if (!response.ok) {
     const message = await readErrorMessage(response);
@@ -59,6 +81,8 @@ export async function fetchStockQuotes(
     includeChart?: boolean;
     modelProfile?: ModelProfile;
     provider?: "yfinance" | "alpaca";
+    /** ISO-8601 end time for historical bars (same `/v1/quotes` API as live). */
+    asOf?: string;
   } = {},
 ): Promise<{
   results: MockQuote[];
@@ -84,10 +108,14 @@ export async function fetchStockQuotes(
   if (options.provider) {
     params.set("provider", options.provider);
   }
+  if (options.asOf) {
+    params.set("asOf", options.asOf);
+  }
 
-  const response = await fetch(`/api/ml/quotes?${params.toString()}`, {
-    cache: "no-store",
-  });
+  const response = await fetchWithNetworkGuard(
+    `/api/ml/quotes?${params.toString()}`,
+    { cache: "no-store" },
+  );
 
   if (!response.ok) {
     const message = await readErrorMessage(response);
@@ -395,6 +423,8 @@ export async function fetchNewsReport(
     modelProfile?: ModelProfile;
     refreshSeconds?: number;
     forceRefresh?: boolean;
+    /** ISO-8601 simulated time; pins headline window to that UTC calendar day (same `/v1/news-report` route). */
+    asOf?: string;
   } = {},
 ): Promise<NewsReport> {
   const normalized = ticker.trim().toUpperCase();
@@ -411,6 +441,9 @@ export async function fetchNewsReport(
   }
   if (options.forceRefresh) {
     params.set("forceRefresh", "true");
+  }
+  if (options.asOf) {
+    params.set("asOf", options.asOf);
   }
 
   const response = await fetch(`/api/ml/news-report?${params.toString()}`, {

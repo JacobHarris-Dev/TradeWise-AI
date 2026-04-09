@@ -76,6 +76,19 @@ function InfoHint({ label: _label }: { label: string }) {
   return null;
 }
 
+function QuotePriceLoadingLabel({
+  className = "text-slate-400",
+}: {
+  className?: string;
+}) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 ${className}`}>
+      <span
+        className="size-3.5 shrink-0 animate-spin rounded-full border-2 border-slate-600 border-t-indigo-400"
+        aria-hidden
+      />
+      Loading data…
+    </span>
 function confidenceDescriptor(confidence: number) {
   if (confidence >= 80) {
     return "High conviction";
@@ -192,6 +205,7 @@ export function TradePage() {
     trackedTickers,
     selectedTicker,
     quotesByTicker,
+    loading: quotesLoading,
     error,
     lastAction,
     tradeMode,
@@ -218,6 +232,8 @@ export function TradePage() {
     marketSnapshot,
     simulation,
     simulationSnapshot,
+    simulatedDate,
+    tradingTimeMode,
     advanceSimulationTime,
     resetSimulationTime,
     setTradeMode,
@@ -247,13 +263,27 @@ export function TradePage() {
   }, [uiMode]);
 
   const isAdvancedView = uiMode === "advanced";
+
+  const marketTimeDate = (() => {
+    if (tradingTimeMode !== "historic") {
+      return clock;
+    }
+    const iso = simulatedDate ?? simulationSnapshot?.time ?? null;
+    if (!iso) {
+      return clock;
+    }
+    const parsed = new Date(iso);
+    return Number.isNaN(parsed.getTime()) ? clock : parsed;
+  })();
+
   const currentTime = new Intl.DateTimeFormat("en-US", {
     weekday: "short",
     hour: "numeric",
     minute: "2-digit",
     second: "2-digit",
     timeZoneName: "short",
-  }).format(clock);
+  }).format(marketTimeDate);
+
   const quote = selectedTicker ? quotesByTicker[selectedTicker] ?? null : null;
   const newsReport = selectedTicker ? newsReportsByTicker[selectedTicker] ?? null : null;
   const selectedSimPriceSymbol = selectedTicker || quote?.ticker || trackedTickers[0] || "";
@@ -276,7 +306,7 @@ export function TradePage() {
       : streamConnected
         ? "Live stream connected"
         : "Connecting to IEX stream";
-  const marketStatusLine = streamStatusDescription
+  const liveMarketStatusLine = streamStatusDescription
     ? `${marketSnapshot.statusLabel} | ${streamStatusDescription}`
     : marketSnapshot.statusLabel;
   const liveFeedLabel = !marketSnapshot.isOpen
@@ -284,6 +314,15 @@ export function TradePage() {
     : streamConnected
       ? "Connected"
       : "Connecting";
+
+  const marketStatusLine =
+    tradingTimeMode === "historic"
+      ? "Historic session · quotes & headlines follow simulated time"
+      : liveMarketStatusLine;
+  const selectedSimPrice =
+    selectedTicker && simulationSnapshot?.currentPrices[selectedTicker] != null
+      ? simulationSnapshot.currentPrices[selectedTicker]
+      : null;
   const paperTradeStats = useMemo(() => {
     return paperTradeLog.reduce(
       (acc, entry) => {
@@ -328,12 +367,29 @@ export function TradePage() {
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">
-          <span className="rounded-full border border-slate-700 bg-slate-950/70 px-3 py-1 text-slate-300">
+          <span
+            suppressHydrationWarning
+            title={
+              tradingTimeMode === "historic"
+                ? "Simulated session time (historic mode)"
+                : "Current local time"
+            }
+            className={`rounded-full border px-3 py-1 ${
+              tradingTimeMode === "historic"
+                ? "border-amber-500/35 bg-amber-950/50 text-amber-100"
+                : "border-slate-700 bg-slate-950/70 text-slate-300"
+            }`}
+          >
+            {tradingTimeMode === "historic" ? (
+              <span className="font-semibold text-amber-200/90">Sim </span>
+            ) : null}
             {currentTime}
           </span>
           <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
             {marketStatusLine}
-            {marketSnapshot.isOpen ? ` | IEX: ${liveFeedLabel}` : null}
+            {tradingTimeMode !== "historic" && marketSnapshot.isOpen
+              ? ` | IEX: ${liveFeedLabel}`
+              : null}
           </p>
         </div>
 
@@ -510,6 +566,15 @@ export function TradePage() {
             ? `Mode: ${TRADE_MODE_LABELS[tradeMode]}. Risk style: ${MODEL_PROFILE_LABELS[modelProfile]}. Check-ins: ${CADENCE_LABELS[refreshCadence]}. Tracking ${trackedTickers.length}/${MAX_TRACKED_TICKERS} symbols.`
             : "Simple view is on: showing beginner-friendly guidance with less data clutter."}
         </p>
+        {quotesLoading ? (
+          <p className="mt-2 inline-flex items-center gap-2 rounded-xl border border-indigo-500/25 bg-indigo-500/10 px-3 py-2 text-sm text-indigo-200">
+            <span
+              className="size-4 shrink-0 animate-spin rounded-full border-2 border-indigo-400/40 border-t-indigo-200"
+              aria-hidden
+            />
+            Loading market data for prices and charts…
+          </p>
+        ) : null}
         {error ? (
           <p className="mt-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">{error}</p>
         ) : null}
@@ -576,7 +641,12 @@ export function TradePage() {
                     onClick={() => selectTrackedTicker(ticker)}
                     className="w-full text-left"
                   >
-                    <StockCard quote={trackedQuote} ticker={ticker} compact />
+                    <StockCard
+                      quote={trackedQuote}
+                      ticker={ticker}
+                      compact
+                      isPriceLoading={quotesLoading}
+                    />
                   </button>
                   <div className="mt-3 flex items-center justify-between gap-2">
                     <div className="min-w-0">
@@ -622,7 +692,7 @@ export function TradePage() {
       {quote ? (
         <section className="grid gap-4 xl:grid-cols-[20rem_minmax(0,1fr)]">
           <div className="flex flex-col gap-4">
-            <StockCard quote={quote} />
+            <StockCard quote={quote} isPriceLoading={quotesLoading} />
 
             {tradeMode === "manual" ? (
               <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-4 shadow-lg shadow-slate-950/20">
@@ -658,7 +728,7 @@ export function TradePage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => simulateOrder("sell")}
+                    onClick={() => simulateOrder("sell", manualShares)}
                     className="flex-1 rounded-xl border border-rose-500/30 bg-rose-500/10 py-2.5 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/15"
                   >
                     Practice sell
@@ -746,13 +816,17 @@ export function TradePage() {
                       Paper account snapshot
                     </p>
                     <p className="mt-1 text-sm font-semibold text-white">
-                      {paperAccountLoading && !paperAccount
-                        ? "Loading account..."
-                        : paperAccount
-                        ? `$${paperAccount.cash.toFixed(2)} cash • ${paperAccount.positions.length} open position${
-                            paperAccount.positions.length === 1 ? "" : "s"
-                          }`
-                        : "No account snapshot yet."}
+                      {tradingTimeMode === "historic" && simulationSnapshot
+                        ? `$${simulationSnapshot.cash.toFixed(2)} cash • ${simulationSnapshot.positions.length} open position${
+                            simulationSnapshot.positions.length === 1 ? "" : "s"
+                          } (historic session)`
+                        : paperAccountLoading && !paperAccount
+                          ? "Loading account..."
+                          : paperAccount
+                            ? `$${paperAccount.cash.toFixed(2)} cash • ${paperAccount.positions.length} open position${
+                                paperAccount.positions.length === 1 ? "" : "s"
+                              }`
+                            : "No account snapshot yet."}
                     </p>
                   </div>
                 ) : null}
@@ -831,7 +905,11 @@ export function TradePage() {
                         <InfoHint label="The most recent price the page has for this stock." />
                       </dt>
                       <dd className="mt-1 font-semibold text-white">
-                        ${quote.lastPrice.toFixed(2)}
+                        {quotesLoading ? (
+                          <QuotePriceLoadingLabel />
+                        ) : (
+                          `$${quote.lastPrice.toFixed(2)}`
+                        )}
                       </dd>
                     </div>
                     <div>
@@ -840,8 +918,14 @@ export function TradePage() {
                         <InfoHint label="This shows how much the price has moved in percentage terms over the latest visible window." />
                       </dt>
                       <dd className="mt-1 font-semibold text-white">
-                        {quote.changePercent >= 0 ? "+" : ""}
-                        {quote.changePercent.toFixed(2)}%
+                        {quotesLoading ? (
+                          <QuotePriceLoadingLabel />
+                        ) : (
+                          <>
+                            {quote.changePercent >= 0 ? "+" : ""}
+                            {quote.changePercent.toFixed(2)}%
+                          </>
+                        )}
                       </dd>
                     </div>
                     <div>
@@ -886,6 +970,20 @@ export function TradePage() {
                     </div>
                   </div>
                   <p className="mt-3 text-sm leading-6 text-slate-300">
+                    {quotesLoading ? (
+                      <span className="inline-flex flex-wrap items-center gap-2">
+                        <QuotePriceLoadingLabel className="text-indigo-200" />
+                        <span className="text-slate-500">
+                          Price data is updating after your last change (e.g. historic mode).
+                        </span>
+                      </span>
+                    ) : (
+                      <>
+                        Quick take: TradeWise currently leans{" "}
+                        {SIGNAL_LABELS[quote.signal].toLowerCase()} on {quote.ticker}. Switch to
+                        Advanced view for confidence and timing metrics.
+                      </>
+                    )}
                     {tradeDecisionExplanation
                       ?? `TradeWise is waiting for a cleaner signal on ${quote.ticker}. Refresh the live news report to load the latest buy, sell, or wait explanation.`}
                   </p>
@@ -902,7 +1000,14 @@ export function TradePage() {
               </section>
             ) : null}
 
-            {quote.history?.length ? (
+            {quotesLoading ? (
+              <section className="flex min-h-[220px] flex-col items-center justify-center gap-2 rounded-3xl border border-slate-800 bg-slate-950/60 p-6 shadow-lg shadow-slate-950/20">
+                <QuotePriceLoadingLabel className="text-sm font-medium text-indigo-200" />
+                <p className="text-center text-xs text-slate-500">
+                  Chart will appear when fresh prices arrive.
+                </p>
+              </section>
+            ) : quote.history?.length ? (
               <LiveLineChart history={quote.history} ticker={quote.ticker} />
             ) : quote.chartDataUri ? (
               <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-3 shadow-lg shadow-slate-950/20">
@@ -961,7 +1066,13 @@ export function TradePage() {
                       Current price
                     </dt>
                     <dd className="mt-1 font-semibold text-zinc-900 dark:text-zinc-100">
-                      {selectedSimPrice == null ? "-" : `$${selectedSimPrice.toFixed(2)}`}
+                      {quotesLoading ? (
+                        <QuotePriceLoadingLabel className="text-zinc-500 dark:text-zinc-400" />
+                      ) : selectedSimPrice == null ? (
+                        "-"
+                      ) : (
+                        `$${selectedSimPrice.toFixed(2)}`
+                      )}
                     </dd>
                   </div>
                   <div>
