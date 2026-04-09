@@ -4,15 +4,11 @@ import os
 import re
 from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass
+from importlib import import_module
 from threading import Lock
 from time import monotonic
 
 import pandas as pd
-
-try:
-    import yfinance as yf
-except ImportError:  # pragma: no cover - exercised only when yfinance is missing
-    yf = None
 
 # Import each submodule separately so one failure does not null out the rest (e.g. timeframe
 # must work for intraday bars even if another submodule fails to load).
@@ -66,6 +62,21 @@ class _CachedPriceHistory:
 
 _PRICE_HISTORY_CACHE: dict[str, _CachedPriceHistory] = {}
 _PRICE_HISTORY_CACHE_LOCK = Lock()
+_YFINANCE = None
+_YFINANCE_IMPORT_ATTEMPTED = False
+
+
+def _get_yfinance():
+    global _YFINANCE, _YFINANCE_IMPORT_ATTEMPTED
+    if _YFINANCE_IMPORT_ATTEMPTED:
+        return _YFINANCE
+
+    _YFINANCE_IMPORT_ATTEMPTED = True
+    try:
+        _YFINANCE = import_module("yfinance")
+    except ImportError:  # pragma: no cover - exercised only when yfinance is missing
+        _YFINANCE = None
+    return _YFINANCE
 
 
 def normalize_ticker(raw_ticker: str) -> str:
@@ -217,6 +228,7 @@ def _download_yfinance_price_history(
     period: str = DEFAULT_HISTORY_PERIOD,
     interval: str = DEFAULT_MARKET_DATA_INTERVAL,
 ) -> pd.DataFrame:
+    yf = _get_yfinance()
     if yf is None:
         raise RuntimeError("Install yfinance to download market data.")
 

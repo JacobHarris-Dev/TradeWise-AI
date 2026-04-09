@@ -3,11 +3,11 @@ from __future__ import annotations
 import os
 import pickle
 from dataclasses import dataclass
+from functools import lru_cache
+from importlib import import_module
 from numbers import Integral
 from pathlib import Path
 from typing import Any, Mapping
-
-import pandas as pd
 
 from .features import FEATURE_COLUMNS, LABEL_MAP, FeatureSnapshot, feature_snapshot_to_dict
 from .schemas import ModelProfile, SignalLabel
@@ -36,6 +36,10 @@ class ModelPrediction:
     signal: SignalLabel
     confidence: float
     model_version: str
+
+
+def _pd():
+    return import_module("pandas")
 
 
 def normalize_model_profile(raw_profile: str | None) -> ModelProfile | None:
@@ -84,11 +88,22 @@ def load_model_bundle(
         return None
 
     try:
-        with artifact_path.open("rb") as handle:
-            payload = pickle.load(handle)
-        return _coerce_bundle(payload)
+        cache_key = str(artifact_path.resolve())
+        mtime_ns = artifact_path.stat().st_mtime_ns
+        return _load_cached_model_bundle(cache_key, mtime_ns)
     except Exception:  # pragma: no cover - defensive fallback for bad artifacts
         return None
+
+
+@lru_cache(maxsize=8)
+def _load_cached_model_bundle(
+    artifact_path: str,
+    mtime_ns: int,
+) -> ModelBundle | None:
+    del mtime_ns
+    with Path(artifact_path).open("rb") as handle:
+        payload = pickle.load(handle)
+    return _coerce_bundle(payload)
 
 
 def predict_signal(
@@ -99,7 +114,7 @@ def predict_signal(
         return None
 
     try:
-        row = pd.DataFrame([_normalize_features(features, bundle.feature_columns)])
+        row = _pd().DataFrame([_normalize_features(features, bundle.feature_columns)])
     except Exception:
         return None
 
@@ -159,7 +174,7 @@ def _coerce_label_key(predicted: Any) -> Any:
     return predicted
 
 
-def _prediction_confidence(estimator: Any, row: pd.DataFrame) -> float:
+def _prediction_confidence(estimator: Any, row: Any) -> float:
     if not hasattr(estimator, "predict_proba"):
         return 50.0
 

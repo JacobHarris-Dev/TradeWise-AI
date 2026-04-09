@@ -1,16 +1,33 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Image from "next/image";
 import Link from "next/link";
 import { startTransition, useEffect, useMemo, useState } from "react";
 import { TradeStarterSectors } from "@/components/dashboard/trade-starter-sectors";
 import { AiDisclaimer } from "@/components/layout/ai-disclaimer";
 import { useTradeWorkspace } from "@/components/providers/trade-workspace-provider";
-import { LiveLineChart } from "@/components/stock/live-line-chart";
 import { StockCard } from "@/components/stock/stock-card";
 import { TradeTickerNewsReport } from "@/components/trade/trade-market-news";
 import type { ModelProfile, RefreshCadence, TradeSignal } from "@/lib/mocks/stock-data";
 import { MAX_TRACKED_TICKERS, type TradeMode } from "@/lib/trade-workspace";
+
+const LiveLineChart = dynamic(
+  () =>
+    import("@/components/stock/live-line-chart").then(
+      (mod) => mod.LiveLineChart,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-3 shadow-lg shadow-slate-950/20">
+        <div className="flex h-[320px] items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 text-sm text-slate-400">
+          Loading chart...
+        </div>
+      </section>
+    ),
+  },
+);
 
 const SIGNAL_BADGES = {
   bullish:
