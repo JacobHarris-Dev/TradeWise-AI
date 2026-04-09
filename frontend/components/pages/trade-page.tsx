@@ -3,8 +3,7 @@
 import dynamic from "next/dynamic";
 import Image from "next/image";
 import Link from "next/link";
-import { startTransition, useEffect, useMemo, useState } from "react";
-import { TradeStarterSectors } from "@/components/dashboard/trade-starter-sectors";
+import { startTransition, useEffect, useMemo, useState, type FormEvent } from "react";
 import { AiDisclaimer } from "@/components/layout/ai-disclaimer";
 import { useTradeWorkspace } from "@/components/providers/trade-workspace-provider";
 import { StockCard } from "@/components/stock/stock-card";
@@ -21,7 +20,7 @@ const LiveLineChart = dynamic(
     ssr: false,
     loading: () => (
       <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-3 shadow-lg shadow-slate-950/20">
-        <div className="flex h-[320px] items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 text-sm text-slate-400">
+        <div className="flex h-80 items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 text-sm text-slate-400">
           Loading chart...
         </div>
       </section>
@@ -512,7 +511,7 @@ function ConfidenceMeter({
             </div>
             <div className="mt-2 h-3 overflow-hidden rounded-full bg-slate-950 ring-1 ring-inset ring-slate-800">
               <div
-                className={`h-full rounded-full bg-gradient-to-r ${tone.bar}`}
+                className={`h-full rounded-full bg-linear-to-r ${tone.bar}`}
                 style={{ width: `${value}%` }}
               />
             </div>
@@ -529,7 +528,13 @@ function ConfidenceMeter({
  */
 export function TradePage() {
   const [uiMode, setUiMode] = useState<TradeUiMode>("simple");
-  const [manualShares, setManualShares] = useState(1);
+  const [manualSharesInput, setManualSharesInput] = useState("1");
+  const [tickerInput, setTickerInput] = useState("");
+  const [tickerSetupFeedback, setTickerSetupFeedback] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
+  const [tickerSubmitPending, setTickerSubmitPending] = useState(false);
   const {
     trackedTickers,
     selectedTicker,
@@ -541,9 +546,6 @@ export function TradePage() {
     modelProfile,
     refreshCadence,
     autoTradeEnabled,
-    mockTradingDay,
-    mockTradingLoading,
-    mockTradingError,
     autoTradeResult,
     paperTradeLog,
     autoTradeLoading,
@@ -572,9 +574,9 @@ export function TradePage() {
     setAutoTradeEnabled,
     selectTrackedTicker,
     removeTrackedTicker,
+    addTrackedTicker,
     loadNewsReport,
     runAutoTrade,
-    loadMockTradingDay,
     simulateOrder,
     clearPaperTradeLog,
   } = useTradeWorkspace();
@@ -593,6 +595,7 @@ export function TradePage() {
   }, [uiMode]);
 
   const isAdvancedView = uiMode === "advanced";
+  const manualShares = Math.max(0, Number.parseInt(manualSharesInput, 10) || 0);
 
   const marketTimeDate = (() => {
     if (tradingTimeMode !== "historic") {
@@ -618,6 +621,8 @@ export function TradePage() {
   const newsReport = selectedTicker ? newsReportsByTicker[selectedTicker] ?? null : null;
   const isHistoricSession =
     tradingTimeMode === "historic" && simulationSnapshot != null;
+  const supportsTradeWiseAutoTrade = tradingTimeMode === "live";
+  const showTradeWiseAutoTrade = supportsTradeWiseAutoTrade && tradeMode === "model";
   const selectedSimPriceSymbol = selectedTicker || quote?.ticker || trackedTickers[0] || "";
   const selectedSimPrice = simulationSnapshot
     ? simulationSnapshot.currentPrices[selectedSimPriceSymbol] ?? null
@@ -811,6 +816,23 @@ export function TradePage() {
   const shouldShowHistoricPracticeChart =
     isHistoricSession && Boolean(simulationSnapshot && simulationTimeline.length > 1);
 
+  async function handleTickerSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setTickerSubmitPending(true);
+    const result = await addTrackedTicker(tickerInput);
+    setTickerSetupFeedback({
+      tone:
+        result.status === "added" || result.status === "exists"
+          ? "success"
+          : "error",
+      message: result.message,
+    });
+    if (result.status === "added" || result.status === "exists") {
+      setTickerInput("");
+    }
+    setTickerSubmitPending(false);
+  }
+
   const simulationMarkers = useMemo(
     () =>
       (simulation?.trades ?? [])
@@ -862,6 +884,14 @@ export function TradePage() {
               : null}
           </p>
         </div>
+        {tradingTimeMode === "historic" ? (
+          <p className="mt-2 text-xs text-slate-500">
+            Historical market bars are driving practice mode. Source:{" "}
+            {quote?.marketDataProvider ?? "historical feed"}
+            {quote?.marketDataInterval ? ` • interval ${quote.marketDataInterval}` : ""}
+            {simulationSnapshot?.time ? ` • as of ${new Date(simulationSnapshot.time).toLocaleString()}` : ""}
+          </p>
+        ) : null}
 
         <section className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <label className="flex flex-col gap-1">
@@ -879,20 +909,22 @@ export function TradePage() {
             </select>
           </label>
 
-          <label className="flex flex-col gap-1">
-            <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-              How you want to practice
-              <InfoHint label="Choose whether you want to make the paper decisions yourself or let TradeWise handle the paper trades for you." />
-            </span>
-            <select
-              value={tradeMode}
-              onChange={(e) => setTradeMode(e.target.value as TradeMode)}
-              className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none transition focus:border-indigo-500"
-            >
-              <option value="manual">{TRADE_MODE_LABELS.manual}</option>
-              <option value="model">{TRADE_MODE_LABELS.model}</option>
-            </select>
-          </label>
+          {supportsTradeWiseAutoTrade ? (
+            <label className="flex flex-col gap-1">
+              <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                How you want to practice
+                <InfoHint label="Choose whether you want to make the paper decisions yourself or let TradeWise handle the paper trades for you." />
+              </span>
+              <select
+                value={tradeMode}
+                onChange={(e) => setTradeMode(e.target.value as TradeMode)}
+                className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none transition focus:border-indigo-500"
+              >
+                <option value="manual">{TRADE_MODE_LABELS.manual}</option>
+                <option value="model">{TRADE_MODE_LABELS.model}</option>
+              </select>
+            </label>
+          ) : null}
 
           <label className="flex flex-col gap-1">
             <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
@@ -926,10 +958,84 @@ export function TradePage() {
             </select>
           </label>
         </section>
+        {!supportsTradeWiseAutoTrade ? (
+          <p className="mt-3 text-xs text-slate-500">
+            Practice replay is manual-only. TradeWise auto-trading is hidden until you switch back to Live mode.
+          </p>
+        ) : null}
       </section>
 
       <section id="trade-setup" className="w-full">
-        <TradeStarterSectors />
+        <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-5 shadow-lg shadow-slate-950/20">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Build your watchlist
+              </p>
+              <h2 className="mt-1 text-lg font-semibold text-white">
+                Add up to three ticker symbols
+              </h2>
+              <p className="mt-1 max-w-2xl text-sm text-slate-400">
+                Type the ticker you want and submit it. TradeWise will not fetch anything while you are typing.
+              </p>
+            </div>
+            <span className="rounded-full border border-slate-700 bg-slate-950/70 px-3 py-1 text-xs font-semibold text-slate-300">
+              {trackedTickers.length}/{MAX_TRACKED_TICKERS} selected
+            </span>
+          </div>
+
+          <form onSubmit={handleTickerSubmit} className="mt-4 space-y-3">
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <label className="flex-1">
+                <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Ticker symbol
+                </span>
+                <input
+                  type="text"
+                  value={tickerInput}
+                  onChange={(event) => {
+                    setTickerInput(
+                      event.target.value.toUpperCase().replace(/[^A-Z0-9.-]/g, ""),
+                    );
+                    if (tickerSetupFeedback) {
+                      setTickerSetupFeedback(null);
+                    }
+                  }}
+                  placeholder="AAPL"
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={12}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-indigo-500"
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={tickerSubmitPending || !tickerInput.trim()}
+                className="rounded-xl bg-indigo-500 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 sm:self-end"
+              >
+                {tickerSubmitPending ? "Adding..." : "Add ticker"}
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              <span>Examples: AAPL, NVDA, PLTR</span>
+              <span className="hidden text-slate-700 sm:inline">•</span>
+              <span>You can track at most three symbols at a time.</span>
+            </div>
+
+            {tickerSetupFeedback ? (
+              <p
+                className={`rounded-xl border px-3 py-2 text-sm ${
+                  tickerSetupFeedback.tone === "success"
+                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                    : "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                }`}
+              >
+                {tickerSetupFeedback.message}
+              </p>
+            ) : null}
+          </form>
+        </section>
       </section>
 
       <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-5 shadow-lg shadow-slate-950/20">
@@ -961,19 +1067,6 @@ export function TradePage() {
               {paperTradeStats.holds} holds
             </span>
           </div>
-        </div>
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          {tradeMode === "model" ? (
-            <button
-              type="button"
-              onClick={() => void loadMockTradingDay()}
-              disabled={mockTradingLoading || !selectedTicker}
-              className="rounded-xl border border-slate-700 bg-slate-950 px-4 py-2.5 text-sm font-medium text-slate-100 transition hover:border-slate-600 hover:bg-slate-800 disabled:opacity-60"
-            >
-              {mockTradingLoading ? "Loading..." : "Replay a practice day"}
-            </button>
-          ) : null}
         </div>
 
         {paperTradeLog.length ? (
@@ -1035,7 +1128,7 @@ export function TradePage() {
 
         <p className="mt-2 text-xs text-slate-500">
           {isAdvancedView
-            ? `Mode: ${TRADE_MODE_LABELS[tradeMode]}. Risk style: ${MODEL_PROFILE_LABELS[modelProfile]}. Check-ins: ${CADENCE_LABELS[refreshCadence]}. Tracking ${trackedTickers.length}/${MAX_TRACKED_TICKERS} symbols.`
+            ? `Mode: ${supportsTradeWiseAutoTrade ? TRADE_MODE_LABELS[tradeMode] : "Manual only in practice replay"}. Risk style: ${MODEL_PROFILE_LABELS[modelProfile]}. Check-ins: ${CADENCE_LABELS[refreshCadence]}. Tracking ${trackedTickers.length}/${MAX_TRACKED_TICKERS} symbols.`
             : "Simple view is on: showing beginner-friendly guidance with less data clutter."}
         </p>
         {quotesLoading ? (
@@ -1049,11 +1142,6 @@ export function TradePage() {
         ) : null}
         {error ? (
           <p className="mt-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">{error}</p>
-        ) : null}
-        {mockTradingError ? (
-          <p className="mt-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
-            {mockTradingError}
-          </p>
         ) : null}
         {autoTradeError ? (
           <p className="mt-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
@@ -1210,42 +1298,54 @@ export function TradePage() {
               isPriceLoading={showDisplayPriceLoading}
             />
 
-            {tradeMode === "manual" ? (
+            {!showTradeWiseAutoTrade ? (
               <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-4 shadow-lg shadow-slate-950/20">
                 <h2 className="text-sm font-semibold text-white">
                   Self-directed practice
                 </h2>
                 <p className="mt-2 text-sm leading-6 text-slate-400">
-                  Use this mode if you want to compare your own call with the model before
-                  risking real money.
+                  {isHistoricSession
+                    ? "Practice replay is manual-only. Use your simulated session to test entries and exits without turning on TradeWise auto-trading."
+                    : "Use this mode if you want to compare your own call with the model before risking real money."}
                 </p>
                 <div className="mt-4">
                   <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
                     Shares
                   </label>
                   <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={manualShares}
-                    onChange={(e) =>
-                      setManualShares(Math.max(1, Number(e.target.value) || 1))
-                    }
-                    className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    pattern="[0-9]*"
+                    value={manualSharesInput}
+                    onChange={(e) => {
+                      const nextValue = e.target.value;
+                      if (nextValue === "" || /^[0-9]+$/.test(nextValue)) {
+                        setManualSharesInput(nextValue);
+                      }
+                    }}
+                    onBlur={() => {
+                      if (!manualSharesInput) {
+                        setManualSharesInput("0");
+                      }
+                    }}
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm font-medium tabular-nums text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-indigo-500/60 focus:ring-2 focus:ring-indigo-500/20"
                   />
                 </div>
                 <div className="mt-4 flex gap-3">
                   <button
                     type="button"
                     onClick={() => simulateOrder("buy", manualShares)}
-                    className="flex-1 rounded-xl bg-emerald-600 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500"
+                    disabled={manualShares <= 0}
+                    className="flex-1 rounded-xl bg-emerald-600 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-emerald-700/40 disabled:text-emerald-100/60"
                   >
                     Practice buy
                   </button>
                   <button
                     type="button"
                     onClick={() => simulateOrder("sell", manualShares)}
-                    className="flex-1 rounded-xl border border-rose-500/30 bg-rose-500/10 py-2.5 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/15"
+                    disabled={manualShares <= 0}
+                    className="flex-1 rounded-xl border border-rose-500/30 bg-rose-500/10 py-2.5 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:border-rose-500/15 disabled:bg-rose-500/5 disabled:text-rose-300/50"
                   >
                     Practice sell
                   </button>
@@ -1332,17 +1432,13 @@ export function TradePage() {
                       Paper account snapshot
                     </p>
                     <p className="mt-1 text-sm font-semibold text-white">
-                      {tradingTimeMode === "historic" && simulationSnapshot
-                        ? `$${simulationSnapshot.cash.toFixed(2)} cash • ${simulationSnapshot.positions.length} open position${
-                            simulationSnapshot.positions.length === 1 ? "" : "s"
-                          } (historic session)`
-                        : paperAccountLoading && !paperAccount
-                          ? "Loading account..."
-                          : paperAccount
-                            ? `$${paperAccount.cash.toFixed(2)} cash • ${paperAccount.positions.length} open position${
-                                paperAccount.positions.length === 1 ? "" : "s"
-                              }`
-                            : "No account snapshot yet."}
+                      {paperAccountLoading && !paperAccount
+                        ? "Loading account..."
+                        : paperAccount
+                          ? `$${paperAccount.cash.toFixed(2)} cash • ${paperAccount.positions.length} open position${
+                              paperAccount.positions.length === 1 ? "" : "s"
+                            }`
+                          : "No account snapshot yet."}
                     </p>
                   </div>
                 ) : null}
@@ -1531,7 +1627,7 @@ export function TradePage() {
                 markers={simulationMarkers}
               />
             ) : quotesLoading ? (
-              <section className="flex min-h-[220px] flex-col items-center justify-center gap-2 rounded-3xl border border-slate-800 bg-slate-950/60 p-6 shadow-lg shadow-slate-950/20">
+              <section className="flex min-h-55 flex-col items-center justify-center gap-2 rounded-3xl border border-slate-800 bg-slate-950/60 p-6 shadow-lg shadow-slate-950/20">
                 <QuotePriceLoadingLabel className="text-sm font-medium text-indigo-200" />
                 <p className="text-center text-xs text-slate-500">
                   Chart will appear when fresh prices arrive.
@@ -1552,7 +1648,7 @@ export function TradePage() {
               </section>
             ) : null}
 
-            {simulationSnapshot ? (
+            {isHistoricSession && simulationSnapshot ? (
               <section className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
@@ -1622,19 +1718,6 @@ export function TradePage() {
                     </dd>
                   </div>
                 </dl>
-                {!isHistoricSession ? (
-                  <div className="mt-4">
-                    <LiveLineChart
-                      points={simulationTimeline}
-                      ticker={selectedSimPriceSymbol}
-                      title="Simulation timeline"
-                      subtitle="The dashed cursor shows the exact replay moment for the selected stock."
-                      currentTime={simulationSnapshot.time}
-                      revealUntilTime={simulationSnapshot.time}
-                      markers={simulationMarkers}
-                    />
-                  </div>
-                ) : null}
                 <div className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50/70 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/60">
                   <p className="text-xs uppercase tracking-[0.16em] text-zinc-500 dark:text-zinc-400">
                     Positions
@@ -1661,16 +1744,16 @@ export function TradePage() {
       ) : (
         <section className="rounded-3xl border border-dashed border-slate-700 bg-slate-900/70 px-4 py-6 shadow-lg shadow-slate-950/20">
           <h2 className="text-sm font-semibold text-white">
-            Load a trade basket first
+            Add a ticker to begin
           </h2>
           <p className="mt-2 text-sm leading-6 text-slate-400">
-            Use the starter sectors to load up to three stocks, then review the basket, replay a practice day, or let TradeWise paper trade it for you.
+            Enter up to three ticker symbols above, submit them one at a time, and then review the live or practice setup for the symbols you chose.
           </p>
           <Link
             href="#trade-setup"
             className="mt-3 inline-flex rounded-xl bg-indigo-500 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-indigo-400"
           >
-            Open setup tools
+            Open ticker setup
           </Link>
         </section>
       )}
@@ -1679,136 +1762,6 @@ export function TradePage() {
         <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
           {lastAction}
         </p>
-      ) : null}
-
-      {mockTradingDay && isAdvancedView ? (
-        <section className="rounded-3xl border border-slate-800 bg-slate-900/90 p-5 shadow-lg shadow-slate-950/20">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-            <div>
-              <h2 className="text-sm font-semibold text-white">
-                Practice replay
-              </h2>
-              <p className="mt-1 text-sm text-slate-400">
-                A dress rehearsal using recent market history so you can see how the model
-                would have behaved before trying a live paper-trading day.
-              </p>
-            </div>
-            <div className="text-xs text-slate-500">
-              {mockTradingDay.sessionLabel}
-            </div>
-          </div>
-
-          <dl className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-            <div className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2">
-              <dt className="text-[11px] uppercase tracking-wide text-slate-500">
-                Model build
-              </dt>
-              <dd className="mt-1 text-sm font-semibold text-white">
-                {mockTradingDay.modelVersion}
-              </dd>
-            </div>
-            <div className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2">
-              <dt className="text-[11px] uppercase tracking-wide text-slate-500">
-                Risk style
-              </dt>
-              <dd className="mt-1 text-sm font-semibold text-white">
-                {MODEL_PROFILE_LABELS[mockTradingDay.modelProfile]}
-              </dd>
-            </div>
-            <div className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2">
-              <dt className="text-[11px] uppercase tracking-wide text-slate-500">
-                Starting cash
-              </dt>
-              <dd className="mt-1 text-sm font-semibold text-white">
-                ${mockTradingDay.summary.startingCash.toFixed(2)}
-              </dd>
-            </div>
-            <div className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2">
-              <dt className="text-[11px] uppercase tracking-wide text-slate-500">
-                Ending value
-              </dt>
-              <dd className="mt-1 text-sm font-semibold text-white">
-                ${mockTradingDay.summary.endingEquity.toFixed(2)}
-              </dd>
-            </div>
-            <div className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2">
-              <dt className="text-[11px] uppercase tracking-wide text-slate-500">
-                Return
-              </dt>
-              <dd className="mt-1 text-sm font-semibold text-white">
-                {mockTradingDay.summary.returnPercent >= 0 ? "+" : ""}
-                {mockTradingDay.summary.returnPercent.toFixed(2)}%
-              </dd>
-            </div>
-            <div className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2">
-              <dt className="text-[11px] uppercase tracking-wide text-slate-500">
-                Paper moves
-              </dt>
-              <dd className="mt-1 text-sm font-semibold text-white">
-                {mockTradingDay.summary.buys} buy / {mockTradingDay.summary.sells} sell
-              </dd>
-            </div>
-          </dl>
-
-          <details className="mt-4 overflow-hidden rounded-2xl border border-slate-800 bg-slate-950/70">
-            <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-white">
-              Show the step-by-step replay
-            </summary>
-            <div className="max-h-80 overflow-auto border-t border-slate-800">
-              <table className="min-w-full divide-y divide-slate-800 text-sm">
-                <thead className="bg-slate-900">
-                  <tr className="text-left text-[11px] uppercase tracking-wide text-slate-500">
-                    <th className="px-3 py-2">Step</th>
-                    <th className="px-3 py-2">Date</th>
-                    <th className="px-3 py-2">Price</th>
-                    <th className="px-3 py-2">Signal</th>
-                    <th className="px-3 py-2">Paper move</th>
-                    <th className="px-3 py-2">Practice balance</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/70">
-                  {mockTradingDay.steps.map((step) => (
-                    <tr key={`${step.slot}-${step.sourceDate}`}>
-                      <td className="px-3 py-2 font-mono text-slate-300">
-                        {step.slot}
-                      </td>
-                      <td className="px-3 py-2 text-slate-400">
-                        {step.sourceDate}
-                      </td>
-                      <td className="px-3 py-2 text-white">
-                        ${step.price.toFixed(2)}
-                      </td>
-                      <td className="px-3 py-2">
-                        <span
-                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
-                            SIGNAL_BADGES[step.signal]
-                          }`}
-                        >
-                          {SIGNAL_LABELS[step.signal]}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2">
-                        <span
-                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
-                            ACTION_BADGES[step.action]
-                          }`}
-                        >
-                          {ACTION_LABELS[step.action]}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-white">
-                        ${step.equity.toFixed(2)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </details>
-          <p className="mt-3 text-xs text-slate-500">
-            Source: {mockTradingDay.datasetSource}
-          </p>
-        </section>
       ) : null}
 
       <button

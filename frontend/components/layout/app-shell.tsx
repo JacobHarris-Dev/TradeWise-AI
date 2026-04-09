@@ -1,18 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect } from "react";
 import {
   Briefcase,
   Home,
   LineChart,
   LogOut,
-  Settings,
 } from "lucide-react";
 import { BrandIcon } from "@/components/brand/brand-icon";
 import { TradingTimeModeStrip } from "@/components/layout/trading-time-mode-strip";
 import { useAuth } from "@/components/providers/auth-provider";
-import { usePortfolioWorkspace } from "@/components/providers/trade-workspace-provider";
+import {
+  usePortfolioWorkspace,
+  useTradeWorkspace,
+} from "@/components/providers/trade-workspace-provider";
 
 type AppShellProps = {
   children: React.ReactNode;
@@ -48,12 +51,36 @@ function initialsForUser(value?: string | null) {
   return raw.slice(0, 2).toUpperCase();
 }
 
+function formatMoney(value: number) {
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 export function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const { user, loading, signOut } = useAuth();
   const { paperAccount, portfolio } = usePortfolioWorkspace();
+  const { simulationSnapshot, tradingTimeMode } = useTradeWorkspace();
 
-  const buyingPower = portfolio?.cash ?? paperAccount?.cash ?? 0;
+  useEffect(() => {
+    if (!loading && !user) {
+      router.replace("/");
+    }
+  }, [loading, router, user]);
+
+  if (loading || !user) {
+    return null;
+  }
+
+  const useHistoricSim =
+    tradingTimeMode === "historic" && simulationSnapshot != null;
+  const buyingPower = useHistoricSim
+    ? simulationSnapshot.cash
+    : portfolio?.cash ?? paperAccount?.cash ?? 0;
+  const buyingPowerLabel = useHistoricSim ? "Practice Buying Power" : "Buying Power";
   const userLabel = user?.displayName ?? user?.email ?? "TradeWise";
   const initials = initialsForUser(user?.displayName ?? user?.email);
 
@@ -94,10 +121,6 @@ export function AppShell({ children }: AppShellProps) {
         </div>
 
         <div className="mt-auto border-t border-slate-800 p-4">
-          <div className="flex items-center gap-3 px-4 py-2 text-slate-400">
-            <Settings className="h-5 w-5" />
-            <span>Settings</span>
-          </div>
           <button
             type="button"
             onClick={() => void signOut()}
@@ -126,13 +149,10 @@ export function AppShell({ children }: AppShellProps) {
           <div className="flex items-center gap-4 md:gap-6">
             <div className="flex flex-col items-end">
               <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                Buying Power
+                {buyingPowerLabel}
               </span>
               <span className="font-mono text-sm font-medium text-emerald-400">
-                ${buyingPower.toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}
+                ${formatMoney(buyingPower)}
               </span>
             </div>
             <div className="flex items-center gap-3">

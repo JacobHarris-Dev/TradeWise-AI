@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from .engine import build_quote_response, normalize_ticker, validate_ticker
 from .model_runtime import normalize_model_profile
@@ -72,6 +72,17 @@ def _partial_sell_quantity(position_before: int) -> int:
     if position_before <= 0:
         return 0
     return min(position_before, max(1, int(position_before * DEFAULT_PARTIAL_SELL_RATIO)))
+
+
+def _normalize_requested_side(
+    raw_side: str | None,
+) -> Literal["buy", "sell"] | None:
+    if raw_side is None:
+        return None
+    side = raw_side.strip().lower()
+    if side in {"buy", "sell"}:
+        return side
+    raise ValueError("Requested side must be buy or sell.")
 
 
 def _allocation_policy(model_profile: ModelProfile | str | None) -> _AllocationPolicy:
@@ -268,6 +279,91 @@ def _execute_local_auto_trade(
         action=action,
         submitted=submitted,
         quantity=quantity,
+        position_before=position_before,
+        position_after=position_after,
+        status_message=status_message,
+        cash_before=cash_before,
+        cash_after=cash_after,
+        order_id=order_id,
+    )
+
+
+def _execute_local_manual_trade(
+    raw_ticker: str,
+    model_profile: ModelProfile | str | None,
+    selected_cadence: RefreshCadence,
+    user_id: str | None,
+    requested_side: Literal["buy", "sell"],
+    quantity: int,
+) -> AutoTradeResponse:
+    if quantity <= 0:
+        raise ValueError("Quantity must be greater than zero.")
+
+    normalized_user_id = normalize_paper_user_id(user_id)
+    quote = build_quote_response(
+        raw_ticker,
+        include_chart=False,
+        model_profile=model_profile,
+        chart_type="line",
+    )
+    account = get_paper_account(normalized_user_id)
+    position_before = next(
+        (position.shares for position in account.positions if position.ticker == quote.ticker),
+        0,
+    )
+    cash_before = account.cash
+    cash_after = account.cash
+    position_after = position_before
+    submitted = False
+    filled = 0
+    status_message = "No manual paper trade submitted."
+    order_id = None
+
+    if requested_side == "buy":
+        filled, position_after, cash_before, cash_after = apply_paper_buy(
+            normalized_user_id,
+            quote.ticker,
+            quote.lastPrice,
+            quantity,
+        )
+        submitted = filled > 0
+        if submitted:
+            order_id = f"local-manual-buy-{int(datetime.now(UTC).timestamp() * 1000)}"
+            status_message = (
+                f"Submitted manual paper buy for {filled} share{'s' if filled != 1 else ''} "
+                f"of {quote.ticker}."
+            )
+        else:
+            status_message = (
+                f"Manual buy skipped for {quote.ticker}; paper account cash (${cash_before:.2f}) "
+                "could not fund the requested share quantity."
+            )
+    else:
+        filled, position_after, cash_before, cash_after = apply_paper_sell(
+            normalized_user_id,
+            quote.ticker,
+            quote.lastPrice,
+            quantity,
+        )
+        submitted = filled > 0
+        if submitted:
+            order_id = f"local-manual-sell-{int(datetime.now(UTC).timestamp() * 1000)}"
+            status_message = (
+                f"Submitted manual paper sell for {filled} share{'s' if filled != 1 else ''} "
+                f"of {quote.ticker} ({position_before} -> {position_after} shares)."
+            )
+        else:
+            status_message = (
+                f"Manual paper sell skipped because there is no open {quote.ticker} position."
+            )
+
+    return _build_auto_trade_response(
+        quote=quote,
+        selected_cadence=selected_cadence,
+        normalized_user_id=normalized_user_id,
+        action=requested_side if submitted else "hold",
+        submitted=submitted,
+        quantity=filled,
         position_before=position_before,
         position_after=position_after,
         status_message=status_message,
@@ -579,13 +675,100 @@ def _execute_alpaca_auto_trade(
     )
 
 
+def _execute_alpaca_manual_trade(
+    raw_ticker: str,
+    model_profile: ModelProfile | str | None,
+    selected_cadence: RefreshCadence,
+    user_id: str | None,
+    requested_side: Literal["buy", "sell"],
+    quantity: int,
+) -> AutoTradeResponse:
+    if quantity <= 0:
+        raise ValueError("Quantity must be greater than zero.")
+
+    quote = build_quote_response(
+        raw_ticker,
+        include_chart=False,
+        model_profile=model_profile,
+        chart_type="line",
+    )
+    client = _trading_client()
+    position_before = _position_before_shares(client, quote.ticker)
+    order_id = None
+    submitted = False
+    position_after = position_before
+    status_message = "No manual paper trade submitted."
+
+    if requested_side == "buy":
+        order = _submit_market_order(client, quote.ticker, OrderSide.BUY, quantity)
+        order_id = str(getattr(order, "id", "")) or None
+        submitted = True
+        position_after = position_before + quantity
+        status_message = (
+            f"Submitted manual paper buy for {quantity} share{'s' if quantity != 1 else ''} "
+            f"of {quote.ticker}."
+        )
+    elif position_before > 0:
+        fill_quantity = min(quantity, position_before)
+        order = _submit_market_order(client, quote.ticker, OrderSide.SELL, fill_quantity)
+        order_id = str(getattr(order, "id", "")) or None
+        submitted = True
+        position_after = max(0, position_before - fill_quantity)
+        quantity = fill_quantity
+        status_message = (
+            f"Submitted manual paper sell for {quantity} share{'s' if quantity != 1 else ''} "
+            f"of {quote.ticker} ({position_before} -> {position_after} shares)."
+        )
+    else:
+        quantity = 0
+        status_message = (
+            f"Manual paper sell skipped because there is no open {quote.ticker} position."
+        )
+
+    return _build_auto_trade_response(
+        quote=quote,
+        selected_cadence=selected_cadence,
+        normalized_user_id=normalize_paper_user_id(user_id),
+        action=requested_side if submitted else "hold",
+        submitted=submitted,
+        quantity=quantity if submitted else 0,
+        position_before=position_before,
+        position_after=position_after,
+        status_message=status_message,
+        order_id=order_id,
+    )
+
+
 def execute_auto_trade(
     raw_ticker: str,
     model_profile: ModelProfile | str | None = "risky",
     cadence: RefreshCadence | str | None = "1m",
     user_id: str | None = None,
+    requested_side: str | None = None,
+    quantity: int | None = None,
 ) -> AutoTradeResponse:
     selected_cadence = normalize_refresh_cadence(cadence)
+    normalized_requested_side = _normalize_requested_side(requested_side)
+    if normalized_requested_side is not None:
+        if quantity is None or quantity <= 0:
+            raise ValueError("Quantity must be greater than zero for manual paper trades.")
+        if DEFAULT_PAPER_EXECUTION_BACKEND == "alpaca":
+            return _execute_alpaca_manual_trade(
+                raw_ticker,
+                model_profile=model_profile,
+                selected_cadence=selected_cadence,
+                user_id=user_id,
+                requested_side=normalized_requested_side,
+                quantity=quantity,
+            )
+        return _execute_local_manual_trade(
+            raw_ticker,
+            model_profile=model_profile,
+            selected_cadence=selected_cadence,
+            user_id=user_id,
+            requested_side=normalized_requested_side,
+            quantity=quantity,
+        )
     if DEFAULT_PAPER_EXECUTION_BACKEND == "alpaca":
         return _execute_alpaca_auto_trade(
             raw_ticker,

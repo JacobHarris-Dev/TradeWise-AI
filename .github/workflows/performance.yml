@@ -1,0 +1,93 @@
+name: Performance Regression Detection
+
+on:
+  pull_request:
+    paths:
+      - 'backend/src/**'
+      - 'backend/tests/**'
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'backend/src/**'
+      - 'backend/tests/**'
+
+jobs:
+  performance:
+    name: Check Performance Regressions
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for baseline comparison
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          pip install pytest pytest-benchmark
+
+      - name: Download baseline trace (if exists)
+        continue-on-error: true
+        run: |
+          # Try to download baseline from artifacts
+          # This would typically fetch from previous runs
+          echo "Baseline trace management would go here"
+
+      - name: Run performance benchmarks
+        run: |
+          cd backend
+          python -m pytest tests/test_performance.py -v -s -m benchmark --tb=short
+
+      - name: Check for regressions
+        run: |
+          cd backend
+          bash scripts/check-performance.sh
+
+      - name: Upload performance trace
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: performance-trace
+          path: backend/.performance-current.json
+          retention-days: 30
+
+      - name: Comment on PR with results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const trace = JSON.parse(fs.readFileSync('backend/.performance-current.json', 'utf8'));
+            const regressions = trace.regressions || [];
+            
+            let comment = '## Performance Report\n\n';
+            
+            if (regressions.length === 0) {
+              comment += '✅ No performance regressions detected\n\n';
+            } else {
+              comment += '⚠️ **Performance regressions detected:**\n\n';
+              for (const reg of regressions) {
+                comment += `- **${reg.operation}**: ${reg.excess.toFixed(3)}s over threshold\n`;
+              }
+            }
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+      - name: Fail on regressions
+        if: failure()
+        run: exit 1

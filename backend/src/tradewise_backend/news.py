@@ -68,6 +68,23 @@ TOPIC_KEYWORDS = {
     "deals": ("partnership", "acquisition", "deal", "contract"),
 }
 
+TOPIC_EXPLANATIONS = {
+    "earnings": "earnings and company guidance",
+    "ai": "AI and chip demand",
+    "products": "product or platform updates",
+    "analysts": "analyst ratings and price-target changes",
+    "macro": "inflation, rates, and the broader economy",
+    "deals": "partnership and contract news",
+}
+
+STUDENT_DRIVER_KEYWORDS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("iran", "ceasefire", "hormuz", "conflict", "oil"), "geopolitics and energy-shipping risk"),
+    (("inflation", "fed", "rates", "economy", "tariff"), "inflation and interest-rate expectations"),
+    (("deal", "contract", "partnership", "acquisition", "meta"), "deal and partnership headlines"),
+    (("earnings", "guidance", "revenue", "quarter"), "earnings expectations"),
+    (("ai", "chip", "gpu", "semiconductor", "model"), "AI demand and semiconductor momentum"),
+)
+
 DEFAULT_NEWS_REFRESH_SECONDS = 90
 DEFAULT_MARKET_NEWS_REFRESH_SECONDS = 300
 DEFAULT_MARKET_NEWS_SYMBOLS = ("SPY", "QQQ", "DIA")
@@ -307,7 +324,37 @@ def summarize_news(articles: list[NewsArticle], max_items: int = 3) -> str | Non
     titles = [_article_title(article) for article in articles[:max_items] if article.title.strip()]
     if not titles:
         return None
-    return ". ".join(titles) + "."
+
+    sentiment = infer_news_sentiment(articles)
+    topics = extract_news_topics(articles)
+    topic_labels = [TOPIC_EXPLANATIONS[topic] for topic in topics if topic in TOPIC_EXPLANATIONS]
+    if topic_labels:
+        if len(topic_labels) == 1:
+            focus_text = topic_labels[0]
+        elif len(topic_labels) == 2:
+            focus_text = f"{topic_labels[0]} and {topic_labels[1]}"
+        else:
+            focus_text = f"{topic_labels[0]}, {topic_labels[1]}, and {topic_labels[2]}"
+    else:
+        focus_text = "broad market risk and momentum"
+
+    combined_titles = " ".join(title.lower() for title in titles)
+    driver_text = "fresh headlines that can move price action quickly"
+    for keywords, explanation in STUDENT_DRIVER_KEYWORDS:
+        if any(keyword in combined_titles for keyword in keywords):
+            driver_text = explanation
+            break
+
+    tone_text = {
+        "positive": "slightly supportive",
+        "negative": "more defensive",
+        "neutral": "mixed",
+    }[sentiment]
+
+    return (
+        f"The latest news is mostly about {focus_text}, and the tone looks {tone_text} right now. "
+        f"For a college student, that means traders are reacting to {driver_text}, so price action may stay headline-driven until a clearer catalyst takes over."
+    )
 
 
 def infer_news_sentiment(articles: list[NewsArticle]) -> NewsSentiment:

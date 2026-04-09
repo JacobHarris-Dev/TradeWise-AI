@@ -12,11 +12,6 @@ import {
 } from "recharts";
 import type { PaperAccountPerformancePoint } from "@/lib/mocks/stock-data";
 import type { PortfolioTimeRange } from "@/lib/mocks/portfolio-demo";
-import {
-  getPortfolioTotal,
-  portfolioHistoryForRange,
-  portfolioPercentChange,
-} from "@/lib/mocks/portfolio-demo";
 
 const RANGES: { key: PortfolioTimeRange; label: string }[] = [
   { key: "1d", label: "1D" },
@@ -78,8 +73,7 @@ export function PortfolioGrowthChart({
   dayChangePercent,
   updatedAt,
 }: PortfolioGrowthChartProps) {
-  const demoTotal = useMemo(() => getPortfolioTotal(), []);
-  const total = totalValue ?? demoTotal;
+  const total = totalValue ?? 0;
   const [range, setRange] = useState<PortfolioTimeRange>("1m");
   const liveData = useMemo(
     () =>
@@ -103,9 +97,9 @@ export function PortfolioGrowthChart({
         return liveData;
       }
 
-      return portfolioHistoryForRange(range, total);
+      return [];
     },
-    [hasLiveIntradayData, liveData, range, total],
+    [hasLiveIntradayData, liveData, range],
   );
   const firstValue = data[0]?.value ?? total;
   const resolvedDayChange = useMemo(
@@ -128,7 +122,7 @@ export function PortfolioGrowthChart({
             : 0;
       }
 
-      return portfolioPercentChange(range, total);
+      return 0;
     },
     [dayChangePercent, firstValue, hasLiveIntradayData, range, total],
   );

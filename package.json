@@ -4,6 +4,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:all": "node scripts/dev.mjs",
+    "demo": "node scripts/demo.mjs",
     "dev:frontend": "npm --prefix frontend run dev",
     "dev:backend": "node scripts/dev-backend.mjs",
     "clean:frontend": "node scripts/clean-frontend-build.mjs",

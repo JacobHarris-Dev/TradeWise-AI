@@ -232,7 +232,7 @@ export function LiveLineChart({
   const isUp = lastPoint && lastPoint.close >= lastPoint.open;
 
   return (
-    <div className="flex h-full min-h-[400px] flex-col rounded-xl border border-slate-800 bg-slate-900/50 backdrop-blur-xl">
+    <div className="flex h-full min-h-100 flex-col rounded-xl border border-slate-800 bg-slate-900/50 backdrop-blur-xl">
       <div className="flex items-start justify-between border-b border-slate-800 p-4">
         <div>
           <h3 className="flex items-center gap-2 font-semibold text-slate-200">
@@ -252,7 +252,7 @@ export function LiveLineChart({
           </div>
         )}
       </div>
-      <div className="flex-1 p-4 h-full relative min-h-[300px]">
+      <div className="relative h-full min-h-75 flex-1 p-4">
         <div ref={chartContainerRef} className="absolute inset-x-4 inset-y-4" />
       </div>
     </div>

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import logging
 import os
+import re
 from dataclasses import dataclass
 from importlib import import_module
 from threading import Lock
 from time import monotonic
 from contextlib import nullcontext
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -15,23 +17,28 @@ DEFAULT_QWEN_MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 DEFAULT_REASONING_CACHE_SECONDS = 120
 DEFAULT_MARKET_BRIEF_CACHE_SECONDS = 300
 DEFAULT_PORTFOLIO_COACH_CACHE_SECONDS = 600
-DEFAULT_INVESTMENT_CHAT_MAX_NEW_TOKENS = 96
+DEFAULT_INVESTMENT_CHAT_CACHE_SECONDS = 180
+DEFAULT_INVESTMENT_CHAT_MAX_NEW_TOKENS = 72
 DEFAULT_REMOTE_LLM_TIMEOUT_SECONDS = 60.0
+DEFAULT_REMOTE_LLM_MODEL_SELECTION = "auto"
+DEFAULT_REMOTE_SIMPLE_MODEL_SELECTION = "smallest"
+DEFAULT_REMOTE_COMPLEX_MODEL_SELECTION = "largest"
+DEFAULT_REMOTE_LLM_KEEP_ALIVE = "15m"
 
 
 @dataclass(frozen=True)
 class ReasoningResult:
     text: str
-    source: str
-    action: str | None = None
+    source: Literal["qwen", "template", "remote-llm"]
+    action: Literal["buy", "sell", "hold"] | None = None
 
 
 @dataclass
 class _ReasoningCacheEntry:
     key: str
     text: str
-    source: str
-    action: str | None
+    source: Literal["qwen", "template", "remote-llm"]
+    action: Literal["buy", "sell", "hold"] | None
     cached_at: float
 
 
@@ -40,6 +47,9 @@ _REASONING_LOCK = Lock()
 _REASONING_CACHE: dict[str, _ReasoningCacheEntry] = {}
 _TOKENIZER = None
 _MODEL = None
+_REMOTE_LLM_PROVIDER: str | None = None
+_REMOTE_LLM_CLIENT = httpx.Client()
+_LOGGER = logging.getLogger("tradewise_backend.news_reasoning")
 
 
 def _use_qwen_enabled() -> bool:
@@ -74,6 +84,13 @@ def _portfolio_coach_cache_seconds() -> int:
     return _cache_seconds(
         "ML_PORTFOLIO_COACH_CACHE_SECONDS",
         DEFAULT_PORTFOLIO_COACH_CACHE_SECONDS,
+    )
+
+
+def _investment_chat_cache_seconds() -> int:
+    return _cache_seconds(
+        "ML_INVESTMENT_CHAT_CACHE_SECONDS",
+        DEFAULT_INVESTMENT_CHAT_CACHE_SECONDS,
     )
 
 
@@ -154,9 +171,154 @@ def _remote_llm_api_key() -> str:
     return os.getenv("ML_QWEN_REMOTE_API_KEY", "").strip()
 
 
-def _remote_llm_model_name() -> str:
-    configured = os.getenv("ML_QWEN_REMOTE_MODEL", "").strip()
-    return configured or _qwen_model_name()
+def _remote_task_complexity(task: str) -> str:
+    if task in {"trade_reasoning", "investment_chat"}:
+        return "complex"
+    return "simple"
+
+
+def _remote_llm_provider() -> str:
+    global _REMOTE_LLM_PROVIDER
+    if _REMOTE_LLM_PROVIDER is not None:
+        return _REMOTE_LLM_PROVIDER
+
+    configured = os.getenv("ML_QWEN_REMOTE_PROVIDER", "").strip().lower()
+    if configured in {"ollama", "openai", "openai-compatible"}:
+        _REMOTE_LLM_PROVIDER = configured
+        return configured
+
+    if not _remote_llm_enabled():
+        _REMOTE_LLM_PROVIDER = "ollama"
+        return _REMOTE_LLM_PROVIDER
+
+    try:
+        _ollama_available_models()
+        _REMOTE_LLM_PROVIDER = "ollama"
+    except Exception:
+        _REMOTE_LLM_PROVIDER = "openai-compatible"
+
+    return _REMOTE_LLM_PROVIDER
+
+
+def _remote_llm_headers() -> dict[str, str]:
+    headers: dict[str, str] = {"content-type": "application/json"}
+    api_key = _remote_llm_api_key()
+    if api_key:
+        headers["authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def _ollama_available_models() -> list[dict[str, Any]]:
+    base_url = _remote_llm_base_url().rstrip("/")
+    if not base_url:
+        raise RuntimeError("Remote LLM base URL is not configured.")
+
+    response = _REMOTE_LLM_CLIENT.get(
+        f"{base_url}/api/tags",
+        headers=_remote_llm_headers(),
+        timeout=min(_remote_llm_timeout_seconds(), 10.0),
+    )
+    response.raise_for_status()
+    data = response.json()
+    models = data.get("models")
+    if not isinstance(models, list):
+        raise RuntimeError("Ollama returned an invalid model list.")
+    return [model for model in models if isinstance(model, dict)]
+
+
+def _ollama_model_name(entry: dict[str, Any]) -> str:
+    for key in ("name", "model"):
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _ollama_model_size(entry: dict[str, Any]) -> int:
+    value = entry.get("size")
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return 0
+
+
+def _select_ollama_model_name(
+    models: list[tuple[str, int]],
+    selection: str,
+) -> str:
+    normalized = selection.strip().lower()
+    if not models:
+        return _qwen_model_name()
+
+    if normalized not in {"", "auto", "smallest", "largest"}:
+        return selection.strip()
+
+    qwen_models = [item for item in models if "qwen" in item[0].lower()]
+    candidates = qwen_models or models
+    if not candidates:
+        return _qwen_model_name()
+
+    if normalized in {"largest"}:
+        candidates.sort(key=lambda item: (item[1], item[0].lower()), reverse=True)
+    else:
+        candidates.sort(key=lambda item: (item[1], item[0].lower()))
+    return candidates[0][0]
+
+
+def _preferred_ollama_model_name(selection: str = DEFAULT_REMOTE_LLM_MODEL_SELECTION) -> str:
+    try:
+        models = _ollama_available_models()
+    except Exception:
+        return _qwen_model_name()
+
+    named_models: list[tuple[str, int]] = []
+    for model in models:
+        name = _ollama_model_name(model)
+        if not name:
+            continue
+        named_models.append((name, _ollama_model_size(model)))
+
+    if not named_models:
+        return _qwen_model_name()
+    return _select_ollama_model_name(named_models, selection)
+
+
+def _remote_llm_model_selection(task: str) -> str:
+    task_key = task.strip().upper()
+    per_task = os.getenv(f"ML_QWEN_REMOTE_MODEL_{task_key}", "").strip()
+    if per_task:
+        return per_task
+
+    complexity = _remote_task_complexity(task)
+    if complexity == "complex":
+        configured = os.getenv("ML_QWEN_REMOTE_MODEL_COMPLEX", "").strip()
+        if configured:
+            return configured
+        default = DEFAULT_REMOTE_COMPLEX_MODEL_SELECTION
+    else:
+        configured = os.getenv("ML_QWEN_REMOTE_MODEL_SIMPLE", "").strip()
+        if configured:
+            return configured
+        default = DEFAULT_REMOTE_SIMPLE_MODEL_SELECTION
+
+    base = os.getenv("ML_QWEN_REMOTE_MODEL", "").strip()
+    if not base:
+        return default
+    if base.lower() == "auto":
+        return default
+    return base
+
+
+def _remote_llm_model_name(task: str = "default") -> str:
+    selection = _remote_llm_model_selection(task)
+    if _remote_llm_provider() == "ollama":
+        return _preferred_ollama_model_name(selection)
+    if selection.lower() not in {"auto", "smallest", "largest"}:
+        return selection
+    return _qwen_model_name()
 
 
 def _remote_llm_timeout_seconds() -> float:
@@ -171,12 +333,84 @@ def _remote_llm_timeout_seconds() -> float:
     return max(1.0, min(value, 300.0))
 
 
+def _remote_llm_keep_alive() -> str | None:
+    raw = os.getenv(
+        "ML_QWEN_REMOTE_KEEP_ALIVE",
+        DEFAULT_REMOTE_LLM_KEEP_ALIVE,
+    ).strip()
+    return raw or None
+
+
 def _remote_llm_enabled() -> bool:
     return bool(_remote_llm_base_url())
 
 
+def _log_qwen_route(
+    *,
+    task: str,
+    source: str,
+    status: str,
+    model_name: str | None = None,
+    provider: str | None = None,
+    detail: str | None = None,
+) -> None:
+    message = (
+        f"task={task} source={source} status={status}"
+        f"{f' provider={provider}' if provider else ''}"
+        f"{f' model={model_name}' if model_name else ''}"
+        f"{f' detail={detail}' if detail else ''}"
+    )
+    if status == "failed":
+        _LOGGER.warning("Qwen routing %s", message)
+        return
+    _LOGGER.info("Qwen routing %s", message)
+
+
 def _should_skip_local_qwen() -> bool:
     return _remote_llm_enabled()
+
+
+def _ollama_chat_completion(
+    *,
+    prompt: str,
+    system_prompt: str,
+    max_new_tokens: int,
+    task: str,
+    model_name: str,
+) -> str:
+    base_url = _remote_llm_base_url().rstrip("/")
+    if not base_url:
+        raise RuntimeError("Remote LLM base URL is not configured.")
+
+    payload: dict[str, Any] = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        "stream": False,
+        "options": {
+            "temperature": 0,
+            "num_predict": max_new_tokens,
+        },
+    }
+    keep_alive = _remote_llm_keep_alive()
+    if keep_alive:
+        payload["keep_alive"] = keep_alive
+
+    response = _REMOTE_LLM_CLIENT.post(
+        f"{base_url}/api/chat",
+        json=payload,
+        headers=_remote_llm_headers(),
+        timeout=_remote_llm_timeout_seconds(),
+    )
+    response.raise_for_status()
+    data = response.json()
+    message = data.get("message") or {}
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("Ollama returned an empty message.")
+    return content.strip()
 
 
 def _openai_chat_completion(
@@ -184,18 +418,15 @@ def _openai_chat_completion(
     prompt: str,
     system_prompt: str,
     max_new_tokens: int,
+    task: str,
+    model_name: str,
 ) -> str:
     base_url = _remote_llm_base_url().rstrip("/")
     if not base_url:
         raise RuntimeError("Remote LLM base URL is not configured.")
 
-    headers: dict[str, str] = {"content-type": "application/json"}
-    api_key = _remote_llm_api_key()
-    if api_key:
-        headers["authorization"] = f"Bearer {api_key}"
-
     payload: dict[str, Any] = {
-        "model": _remote_llm_model_name(),
+        "model": model_name,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
@@ -204,10 +435,10 @@ def _openai_chat_completion(
         "max_tokens": max_new_tokens,
     }
 
-    response = httpx.post(
+    response = _REMOTE_LLM_CLIENT.post(
         f"{base_url}/v1/chat/completions",
         json=payload,
-        headers=headers,
+        headers=_remote_llm_headers(),
         timeout=_remote_llm_timeout_seconds(),
     )
     response.raise_for_status()
@@ -222,19 +453,67 @@ def _openai_chat_completion(
     return content.strip()
 
 
+def _remote_chat_completion(
+    *,
+    prompt: str,
+    system_prompt: str,
+    max_new_tokens: int,
+    task: str,
+) -> str:
+    provider = _remote_llm_provider()
+    model_name = _remote_llm_model_name(task)
+    try:
+        if provider == "ollama":
+            response = _ollama_chat_completion(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                max_new_tokens=max_new_tokens,
+                task=task,
+                model_name=model_name,
+            )
+        else:
+            response = _openai_chat_completion(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                max_new_tokens=max_new_tokens,
+                task=task,
+                model_name=model_name,
+            )
+    except Exception as exc:
+        _log_qwen_route(
+            task=task,
+            source="remote-llm",
+            status="failed",
+            provider=provider,
+            model_name=model_name,
+            detail=exc.__class__.__name__,
+        )
+        raise
+    _log_qwen_route(
+        task=task,
+        source="remote-llm",
+        status="served",
+        provider=provider,
+        model_name=model_name,
+    )
+    return response
+
+
 def _chat_completion_with_fallback(
     *,
     system_prompt: str,
     prompt: str,
     max_new_tokens: int,
     template_text: str,
+    task: str,
 ) -> ReasoningResult:
     if _remote_llm_enabled():
         try:
-            reply = _openai_chat_completion(
+            reply = _remote_chat_completion(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 max_new_tokens=max_new_tokens,
+                task=task,
             )
             if reply:
                 return ReasoningResult(text=reply, source="remote-llm")
@@ -290,7 +569,7 @@ def _recommended_trade_action(
     momentum: float,
     short_moving_average: float,
     long_moving_average: float,
-) -> str:
+) -> Literal["buy", "sell", "hold"]:
     normalized_sentiment = _normalize_sentiment(sentiment)
     trend_up = short_moving_average >= long_moving_average and momentum >= -0.0025
     trend_down = short_moving_average < long_moving_average and momentum <= 0.0025
@@ -323,7 +602,7 @@ def _recommended_trade_action(
 
 def _template_reasoning(
     ticker: str,
-    action: str,
+    action: Literal["buy", "sell", "hold"],
     signal: str,
     confidence: float,
     sentiment: str | None,
@@ -371,8 +650,60 @@ def _template_market_brief(
     headline_text = headlines[0] if headlines else "No standout headline was available."
     return (
         f"{lead} The current tone looks {sentiment}, with the biggest focus on {topic_text}. "
-        f"Headline to watch: {headline_text}."
+        f"The main headline to watch is about {headline_text}."
     )
+
+
+def _normalize_student_brief_text(text: str, fallback_text: str, max_sentences: int = 3) -> str:
+    cleaned = re.sub(r"[ \t]*\n+[ \t]*", " ", text).strip()
+    cleaned = cleaned.replace("**", "").replace("__", "")
+    cleaned = re.sub(r"#+\s*", "", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+
+    sentences = re.split(r"(?<=[.!?])\s+", cleaned)
+    kept: list[str] = []
+    for sentence in sentences:
+        candidate = sentence.strip(" -*•")
+        if not candidate:
+            continue
+        lowered = candidate.lower().strip(":")
+        if lowered in {"market brief", "overview", "brief"}:
+            continue
+        if lowered.startswith("topics") or lowered.startswith("headlines"):
+            continue
+        kept.append(candidate)
+        if len(kept) >= max_sentences:
+            break
+
+    normalized = " ".join(kept).strip()
+    if not normalized:
+        return fallback_text
+    return normalized
+
+
+def _normalize_investment_chat_text(
+    text: str,
+    fallback_text: str,
+    *,
+    max_sentences: int = 3,
+) -> str:
+    cleaned = re.sub(r"[ \t]*\n+[ \t]*", " ", text).strip()
+    cleaned = cleaned.replace("**", "").replace("__", "")
+    cleaned = re.sub(r"#+\s*", "", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+
+    sentences = re.split(r"(?<=[.!?])\s+", cleaned)
+    kept: list[str] = []
+    for sentence in sentences:
+        candidate = sentence.strip(" -*•")
+        if not candidate:
+            continue
+        kept.append(candidate)
+        if len(kept) >= max_sentences:
+            break
+
+    normalized = " ".join(kept).strip()
+    return normalized or fallback_text
 
 
 def _template_portfolio_coach(
@@ -407,7 +738,7 @@ def _bucketed_value(value: float, step: float) -> str:
 
 def _cache_key(
     ticker: str,
-    action: str,
+    action: Literal["buy", "sell", "hold"],
     signal: str,
     confidence: float,
     sentiment: str | None,
@@ -449,8 +780,8 @@ def _cached_reasoning(key: str, ttl_seconds: int) -> ReasoningResult | None:
 def _store_cached_reasoning(
     key: str,
     text: str,
-    source: str,
-    action: str | None = None,
+    source: Literal["qwen", "template", "remote-llm"],
+    action: Literal["buy", "sell", "hold"] | None = None,
 ) -> None:
     with _REASONING_LOCK:
         _REASONING_CACHE[key] = _ReasoningCacheEntry(
@@ -489,8 +820,10 @@ def build_market_news_brief(
     topic_text = ", ".join(topics[:3]) if topics else "none"
     headline_block = "\n".join(f"- {headline}" for headline in headlines[:4]) or "- No headline available"
     prompt = (
-        "Write a short market brief for a student trader in exactly 3 sentences. "
-        "Keep it plain English, practical, and focused on what matters today.\n\n"
+        "Write a short market brief for a college student in exactly 3 short sentences. "
+        "Keep it plain English, practical, and focused on what matters today. "
+        "Do not use markdown, bullets, labels, or section headers. "
+        "Explain what the headlines mean instead of listing them back word-for-word.\n\n"
         f"Market summary: {summary or 'No summary available'}\n"
         f"Sentiment: {sentiment}\n"
         f"Topics: {topic_text}\n"
@@ -502,9 +835,11 @@ def build_market_news_brief(
         prompt=prompt,
         max_new_tokens=120,
         template_text=template_text,
+        task="market_brief",
     )
-    _store_cached_reasoning(key, result.text, result.source)
-    return result
+    normalized_text = _normalize_student_brief_text(result.text, template_text)
+    _store_cached_reasoning(key, normalized_text, result.source)
+    return ReasoningResult(text=normalized_text, source=result.source)
 
 
 def build_portfolio_coach_reply(
@@ -578,6 +913,7 @@ def build_portfolio_coach_reply(
         prompt=prompt,
         max_new_tokens=140,
         template_text=template_text,
+        task="portfolio_coach",
     )
     _store_cached_reasoning(key, result.text, result.source)
     return result
@@ -626,7 +962,7 @@ def _load_qwen():
 
 def _qwen_reasoning(
     ticker: str,
-    action: str,
+    action: Literal["buy", "sell", "hold"],
     signal: str,
     confidence: float,
     sentiment: str | None,
@@ -666,10 +1002,11 @@ def _qwen_reasoning(
 
     if _remote_llm_enabled():
         try:
-            reply = _openai_chat_completion(
+            reply = _remote_chat_completion(
                 prompt=prompt,
                 system_prompt="You are TradeWise AI, a decisive paper-trading coach for beginners.",
                 max_new_tokens=180,
+                task="trade_reasoning",
             )
             if reply:
                 return ReasoningResult(text=reply, source="remote-llm", action=action)
@@ -944,13 +1281,29 @@ def build_investment_chat_reply(
             )
         )
     )
+    fallback_text = (
+        f"I mapped your goal to a {model_profile} profile and selected {selected_text}. "
+        f"{rationale_text} While staying focused on {sector_text}."
+    )
+    key = "|".join(
+        [
+            "investment-chat-v2",
+            clean_prompt.lower(),
+            model_profile,
+            ",".join(sectors[:3]),
+            ",".join(selected_tickers[:3]),
+        ]
+    )
+    cached = _cached_reasoning(key, _investment_chat_cache_seconds())
+    if cached is not None:
+        return cached
 
     prompt_text = (
         "You are TradeWise AI, a concise investing copilot for students. "
-        "Respond in exactly 4 short sentences. Avoid guarantees and hype. "
-        "Use one sentence to name the 3 selected stocks and explain the overall theme. "
-        "Use one sentence per stock to give a concrete reason for each pick based on sector fit, momentum, quality, or diversification. "
-        "End with a short risk sentence.\n\n"
+        "Respond in exactly 3 short sentences. Avoid guarantees, hype, markdown, bullets, and labels. "
+        "Sentence 1 must name the selected stocks and explain the overall theme. "
+        "Sentence 2 must give concrete reasons for the strongest two picks. "
+        "Sentence 3 must explain the remaining pick and end with one short risk note.\n\n"
         f"User goal: {clean_prompt}\n"
         f"Risk profile: {model_profile}\n"
         f"Sectors inferred: {sector_text}\n"
@@ -961,21 +1314,22 @@ def build_investment_chat_reply(
 
     if _remote_llm_enabled():
         try:
-            reply = _openai_chat_completion(
+            reply = _remote_chat_completion(
                 prompt=prompt_text,
                 system_prompt="You are TradeWise AI, a concise investing copilot for students.",
                 max_new_tokens=_investment_chat_max_new_tokens(),
+                task="investment_chat",
             )
             if reply:
-                return ReasoningResult(text=reply, source="remote-llm")
+                normalized_reply = _normalize_investment_chat_text(
+                    reply,
+                    fallback_text,
+                )
+                _store_cached_reasoning(key, normalized_reply, "remote-llm")
+                return ReasoningResult(text=normalized_reply, source="remote-llm")
         except Exception:
-            return ReasoningResult(
-                text=(
-                    f"I mapped your goal to a {model_profile} profile and selected {selected_text}. "
-                    f"{rationale_text} While staying focused on {sector_text}."
-                ),
-                source="template",
-            )
+            _store_cached_reasoning(key, fallback_text, "template")
+            return ReasoningResult(text=fallback_text, source="template")
 
     if (
         _should_skip_local_qwen()
@@ -984,13 +1338,8 @@ def build_investment_chat_reply(
         or not _qwen_runtime_supported()
         or not _qwen_can_run_chat_in_current_env()
     ):
-        return ReasoningResult(
-            text=(
-                f"I mapped your goal to a {model_profile} profile and selected {selected_text}. "
-                f"{rationale_text} While staying focused on {sector_text}."
-            ),
-            source="template",
-        )
+        _store_cached_reasoning(key, fallback_text, "template")
+        return ReasoningResult(text=fallback_text, source="template")
 
     try:
         torch = import_module("torch")
@@ -1011,14 +1360,14 @@ def build_investment_chat_reply(
         generated = tokenizer.decode(output_ids[0], skip_special_tokens=True)
         reply = generated[len(prompt_text):].strip() if generated.startswith(prompt_text) else generated.strip()
         if reply:
-            return ReasoningResult(text=reply, source="qwen")
+            normalized_reply = _normalize_investment_chat_text(
+                reply,
+                fallback_text,
+            )
+            _store_cached_reasoning(key, normalized_reply, "qwen")
+            return ReasoningResult(text=normalized_reply, source="qwen")
     except Exception:
         pass
 
-    return ReasoningResult(
-        text=(
-            f"I mapped your goal to a {model_profile} profile and selected {selected_text}. "
-            f"{rationale_text} While staying focused on {sector_text}."
-        ),
-        source="template",
-    )
+    _store_cached_reasoning(key, fallback_text, "template")
+    return ReasoningResult(text=fallback_text, source="template")

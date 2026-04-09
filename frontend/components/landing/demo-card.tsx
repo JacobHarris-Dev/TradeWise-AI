@@ -103,7 +103,7 @@ export function LiveDemoCard() {
                     className="p-3 rounded-lg bg-slate-50 border border-slate-200"
                   >
                     <div className="flex items-start gap-2 mb-1">
-                      <Newspaper className="w-4 h-4 text-slate-400 flex-shrink-0 mt-0.5" />
+                      <Newspaper className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
                       <div className="flex-1 min-w-0">
                         <div className="text-xs font-medium text-slate-900 truncate">
                           {item.title}
@@ -144,7 +144,7 @@ export function LiveDemoCard() {
               Risk Assessment
             </div>
             <div className="flex items-center gap-3 p-4 rounded-lg bg-amber-50 border border-amber-100">
-              <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0" />
+              <AlertCircle className="h-5 w-5 shrink-0 text-amber-600" />
               <div>
                 <div className="font-bold text-amber-900">Moderate Risk</div>
                 <div className="text-sm text-amber-700">
