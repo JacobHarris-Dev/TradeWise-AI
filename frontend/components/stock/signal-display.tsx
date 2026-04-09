@@ -108,7 +108,7 @@ export function StockSignalDisplay({
                   AI Signal
                 </h3>
                 <div className="flex items-center gap-3">
-                  <CheckCircle2 className="h-6 w-6 flex-shrink-0 text-emerald-300" />
+                  <CheckCircle2 className="h-6 w-6 shrink-0 text-emerald-300" />
                   <div>
                     <div className="text-xl font-bold text-emerald-300">
                       {signal.signal}
@@ -158,7 +158,7 @@ export function StockSignalDisplay({
                   className="rounded-2xl border border-slate-800 bg-slate-950/80 p-3"
                 >
                   <div className="flex items-start gap-2">
-                    <Newspaper className="mt-0.5 h-4 w-4 flex-shrink-0 text-slate-500" />
+                    <Newspaper className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" />
                     <div className="flex-1 min-w-0">
                       <div className="text-xs font-medium text-slate-100">
                         {item.title}

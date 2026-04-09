@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from threading import Lock
 from time import monotonic
+from typing import Any, Literal, cast
 
 import pandas as pd
 
@@ -100,11 +101,11 @@ def validate_ticker(ticker: str) -> str:
     return ticker
 
 
-def normalize_market_data_provider(provider: str | None) -> str:
+def normalize_market_data_provider(provider: str | None) -> Literal["yfinance", "alpaca"]:
     selected = (provider or DEFAULT_MARKET_DATA_PROVIDER).strip().lower()
     if selected not in ALLOWED_MARKET_DATA_PROVIDERS:
         raise ValueError("Invalid market data provider. Use yfinance or alpaca.")
-    return selected
+    return cast(Literal["yfinance", "alpaca"], selected)
 
 
 def _market_data_cache_seconds() -> int:
@@ -412,25 +413,27 @@ def _parse_datetime(value: str | None) -> datetime | None:
     return parsed.to_pydatetime()
 
 
-def _parse_alpaca_timeframe(interval: str) -> TimeFrame:
+def _parse_alpaca_timeframe(interval: str) -> Any:
     if TimeFrame is None or TimeFrameUnit is None:
         raise RuntimeError(
             "Alpaca timeframe types failed to load. Install alpaca-py (pip install alpaca-py) "
             "and ensure imports from alpaca.data.timeframe succeed for intervals like 15m."
         )
+    timeframe_cls = cast(Any, TimeFrame)
+    timeframe_unit_cls = cast(Any, TimeFrameUnit)
     normalized = interval.strip().lower()
     if normalized.endswith("m"):
         amount = int(normalized[:-1])
-        return TimeFrame(amount, TimeFrameUnit.Minute)
+        return timeframe_cls(amount, timeframe_unit_cls.Minute)
     if normalized.endswith("h"):
         amount = int(normalized[:-1])
-        return TimeFrame(amount, TimeFrameUnit.Hour)
+        return timeframe_cls(amount, timeframe_unit_cls.Hour)
     if normalized == "1d":
-        return TimeFrame.Day
+        return timeframe_cls.Day
     if normalized == "1wk":
-        return TimeFrame.Week
+        return timeframe_cls.Week
     if normalized == "1mo":
-        return TimeFrame.Month
+        return timeframe_cls.Month
     raise ValueError("Invalid Alpaca interval. Use values like 15m, 1h, or 1d.")
 
 
@@ -508,7 +511,7 @@ def _is_alpaca_rate_limit_error(exc: BaseException) -> bool:
     return False
 
 
-def _alpaca_client_locked() -> StockHistoricalDataClient:
+def _alpaca_client_locked() -> Any:
     """Return a process-wide Alpaca client. Caller must hold ``_ALPACA_SHARED_LOCK``."""
     global _ALPACA_CLIENT_INSTANCE
 
@@ -523,9 +526,9 @@ def _alpaca_client_locked() -> StockHistoricalDataClient:
                 "Set ML_MARKET_DATA_ALPACA_KEY_ID and ML_MARKET_DATA_ALPACA_SECRET_KEY "
                 "(or APCA_API_KEY_ID / APCA_API_SECRET_KEY) to use Alpaca market data."
             )
-        _ALPACA_CLIENT_INSTANCE = StockHistoricalDataClient(key_id, secret_key)
+        _ALPACA_CLIENT_INSTANCE = cast(Any, StockHistoricalDataClient)(key_id, secret_key)
 
-    return _ALPACA_CLIENT_INSTANCE  # type: ignore[return-value]
+    return _ALPACA_CLIENT_INSTANCE
 
 
 def _download_alpaca_price_history(
@@ -537,7 +540,10 @@ def _download_alpaca_price_history(
     feed: str = DEFAULT_ALPACA_FEED,
 ) -> pd.DataFrame:
     resolved_end = _resolve_alpaca_end(feed, end)
-    request = StockBarsRequest(
+    if StockBarsRequest is None:
+        raise RuntimeError("Install alpaca-py to download Alpaca market data.")
+    stock_bars_request_cls = cast(Any, StockBarsRequest)
+    request = stock_bars_request_cls(
         symbol_or_symbols=ticker,
         timeframe=_parse_alpaca_timeframe(interval),
         start=_parse_datetime(start) or _parse_period_to_start(period),
@@ -550,6 +556,7 @@ def _download_alpaca_price_history(
     interval_seconds = _alpaca_min_request_interval_seconds()
     max_retries = _alpaca_max_retries()
     base_delay = _alpaca_retry_base_seconds()
+    history = None
 
     for attempt in range(max_retries):
         try:
@@ -567,6 +574,9 @@ def _download_alpaca_price_history(
             sleep_seconds = base_delay * (2**attempt)
             if sleep_seconds > 0:
                 time.sleep(sleep_seconds)
+
+    if history is None:
+        raise RuntimeError(f"Failed to download Alpaca price history for {ticker}.")
 
     if isinstance(history.index, pd.MultiIndex) and "symbol" in history.index.names:
         history = history.reset_index(level="symbol", drop=True)

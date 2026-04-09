@@ -38,7 +38,7 @@ itself runs on your desktop PC.
 Recommended wiring:
 
 - MacBook runs `frontend/` and `backend/`
-- Desktop PC runs only an OpenAI-compatible model server
+- Desktop PC runs only a local Ollama server
 - `backend/.env` points `ML_QWEN_REMOTE_BASE_URL` at the desktop server
 - `frontend/.env.local` points `ML_BACKEND_URL` at the MacBook backend
 
@@ -50,8 +50,9 @@ ML_BACKEND_URL=http://192.168.1.50:8000
 
 # backend/.env
 ML_QWEN_REMOTE_BASE_URL=http://192.168.1.77:8001
-ML_QWEN_REMOTE_API_KEY=your-key-if-needed
-ML_QWEN_REMOTE_MODEL=qwen2.5:7b
+ML_QWEN_REMOTE_PROVIDER=ollama
+ML_QWEN_REMOTE_MODEL=auto
+ML_QWEN_REMOTE_API_KEY=
 ```
 
 The backend will use the remote desktop model for chat when `ML_QWEN_REMOTE_BASE_URL`
@@ -73,13 +74,17 @@ or the template reply, depending on your other env flags.
 
 ## Desktop LLM Server
 
-The remote model server only needs to expose an OpenAI-compatible endpoint:
-`POST /v1/chat/completions`.
+The remote model server is now treated as a local Ollama instance on the desktop.
+TradeWise will first query `GET /api/tags` to see which models are available,
+then use `POST /api/chat` with the selected model.
 
-That can be a local serving stack on the desktop such as vLLM, Ollama with an
-OpenAI-compatible proxy, or another OpenAI-style inference server. The MacBook
-backend will send the chat prompt to that endpoint and keep all other backend
-logic local.
+If you want the backend to pick a lighter model automatically, leave
+`ML_QWEN_REMOTE_MODEL=auto` in place. The backend will prefer the smallest Qwen
+model it finds, and fall back to the smallest available Ollama model if no Qwen
+model is installed.
+
+If you want to lock it to a specific model, set `ML_QWEN_REMOTE_MODEL` to the
+exact Ollama tag, such as `qwen2.5:1.5b` or `qwen2.5:7b`.
 
 ## Model Training
 

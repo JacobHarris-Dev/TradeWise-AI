@@ -205,6 +205,8 @@ class AutoTradeRequest(BaseModel):
     modelProfile: ModelProfile = "risky"
     cadence: RefreshCadence = "1m"
     userId: str | None = None
+    requestedSide: Literal["buy", "sell"] | None = None
+    quantity: int | None = Field(default=None, ge=1)
 
 
 class AutoTradeBatchRequest(BaseModel):

@@ -59,6 +59,7 @@ export function TradeTickerNewsReport({
     newsReport?.newsSummary
     ?? quote.newsSummary
     ?? "Headlines below give the backdrop behind the current TradeWise call.";
+  const headlinePreview = visibleNewsHeadlines.slice(0, 3);
 
   return (
     <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/80 px-4 py-3">
@@ -82,11 +83,19 @@ export function TradeTickerNewsReport({
         </p>
       </div>
       <p className="mt-3 text-sm leading-6 text-slate-300">{marketContext}</p>
-      {visibleNewsHeadlines.length ? (
-        <div className="mt-3 space-y-2 text-sm leading-6 text-slate-300">
-          {visibleNewsHeadlines.map((headline) => (
-            <p key={headline}>{headline}</p>
-          ))}
+      {headlinePreview.length ? (
+        <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+            Headlines to watch
+          </p>
+          <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-300">
+            {headlinePreview.map((headline) => (
+              <li key={headline} className="flex items-start gap-2">
+                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-500" />
+                <span>{headline}</span>
+              </li>
+            ))}
+          </ul>
         </div>
       ) : null}
       {isAdvancedView ? (

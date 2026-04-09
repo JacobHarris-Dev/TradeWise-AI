@@ -8,6 +8,16 @@ from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
+
+StockUniverseMatchType = Literal[
+    "ticker",
+    "company",
+    "alias",
+    "search-term",
+    "theme-tag",
+    "company-fragment",
+]
 
 DEFAULT_RECOMMENDATION_COUNT = 3
 MAX_RECOMMENDATION_COUNT = 5
@@ -29,7 +39,7 @@ class StockUniverseRow:
 @dataclass(frozen=True)
 class StockUniverseMatch:
     row: StockUniverseRow
-    match_type: str
+    match_type: StockUniverseMatchType
     matched_term: str
     score: int
 
@@ -254,10 +264,10 @@ def _row_sort_key(item: StockUniverseRow) -> tuple[int, int, str, str]:
     return (0 if item.is_student_friendly else 1, item.priority, item.industry, item.ticker)
 
 
-def _lookup_terms(row: StockUniverseRow) -> tuple[tuple[str, str, int], ...]:
+def _lookup_terms(row: StockUniverseRow) -> tuple[tuple[str, StockUniverseMatchType, int], ...]:
     derived_terms = _derive_company_terms(row.company_name)
     normalized_company = _normalize_lookup_text(row.company_name)
-    terms: list[tuple[str, str, int]] = []
+    terms: list[tuple[str, StockUniverseMatchType, int]] = []
     if normalized_company:
         terms.append((normalized_company, "company", 90))
     for alias in row.aliases:
@@ -276,8 +286,8 @@ def _lookup_terms(row: StockUniverseRow) -> tuple[tuple[str, str, int], ...]:
         normalized = _normalize_lookup_text(term)
         if normalized:
             terms.append((normalized, "company-fragment", 78))
-    deduped: list[tuple[str, str, int]] = []
-    seen: set[tuple[str, str]] = set()
+    deduped: list[tuple[str, StockUniverseMatchType, int]] = []
+    seen: set[tuple[str, StockUniverseMatchType]] = set()
     for term, match_type, base_score in terms:
         key = (term, match_type)
         if key in seen:

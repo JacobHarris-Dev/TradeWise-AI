@@ -8,7 +8,6 @@ import {
   ResponsiveContainer,
   Tooltip,
 } from "recharts";
-import { getPortfolioPositions } from "@/lib/mocks/portfolio-demo";
 
 const COLORS = ["#059669", "#2563eb", "#7c3aed", "#d97706", "#db2777", "#0891b2"];
 
@@ -63,20 +62,21 @@ export function PortfolioAllocationChart({
   description = "Hover a slice to see share of your portfolio",
   totalEquity,
 }: PortfolioAllocationChartProps) {
-  const demoPositions = useMemo(() => getPortfolioPositions(), []);
+  const sourceRows = useMemo(() => {
+    const source = positions ?? [];
+    return source.filter((row) => row.value > 0);
+  }, [positions]);
   const data: PieDatum[] = useMemo(
     () => {
-      const source = positions ?? demoPositions;
-      const nonZero = source.filter((row) => row.value > 0);
-      const total = nonZero.reduce((sum, row) => sum + row.value, 0);
-      return nonZero.map((row) => ({
+      const total = sourceRows.reduce((sum, row) => sum + row.value, 0);
+      return sourceRows.map((row) => ({
         name: row.ticker,
         value: row.value,
         pct:
           row.pct ?? (total > 0 ? Math.round((row.value / total) * 1000) / 10 : 0),
       }));
     },
-    [demoPositions, positions],
+    [sourceRows],
   );
 
   const [active, setActive] = useState<number | undefined>(undefined);
@@ -84,10 +84,6 @@ export function PortfolioAllocationChart({
     () => totalEquity ?? data.reduce((sum, row) => sum + row.value, 0),
     [data, totalEquity],
   );
-  const sourceRows = useMemo(() => {
-    const source = positions ?? demoPositions;
-    return source.filter((row) => row.value > 0);
-  }, [demoPositions, positions]);
 
   return (
     <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-sm">
@@ -98,7 +94,7 @@ export function PortfolioAllocationChart({
 
       {data.length ? (
         <>
-          <div className="relative mx-auto mt-2 h-[280px] w-full max-w-[320px] min-w-0">
+          <div className="relative mx-auto mt-2 h-70 w-full max-w-[320px] min-w-0">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -110,6 +106,7 @@ export function PortfolioAllocationChart({
                   paddingAngle={2}
                   dataKey="value"
                   nameKey="name"
+                  isAnimationActive={false}
                   onMouseEnter={(_, i) => setActive(i)}
                   onMouseLeave={() => setActive(undefined)}
                 >
