@@ -2,6 +2,7 @@
 
 import {
   createContext,
+  startTransition,
   useCallback,
   useContext,
   useEffect,
@@ -11,9 +12,10 @@ import {
 } from "react";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
+  persistedTradingSlicesEqual,
   saveTradingState,
   subscribeToTradingState,
-  type PersistedTradingState,
+  type PersistedTradingSlices,
 } from "@/lib/firestore";
 import { getMlBackendWebSocketUrl } from "@/lib/ml/backend-ws";
 import type {
@@ -49,6 +51,7 @@ import {
   readTradeWorkspace,
   TRADE_STORAGE_KEYS,
   type TradeMode,
+  type TradingTimeMode,
   type TradingSimulation,
   type SimulationSnapshot,
   type TradeWorkspaceSnapshot,
@@ -56,6 +59,8 @@ import {
   writeStoredString,
   writeTradeWorkspace,
   shiftSimulationTime,
+  getSimulationTimelineBounds,
+  localDateInputToUsMarketOpenIso,
 } from "@/lib/trade-workspace";
 
 const CADENCE_MS: Record<RefreshCadence, number> = {
@@ -66,6 +71,43 @@ const CADENCE_MS: Record<RefreshCadence, number> = {
 
 const PORTFOLIO_REFRESH_MS = 30_000;
 const WORKSPACE_PERSIST_DEBOUNCE_MS = 750;
+
+/** Historic clock: fire once per real second so the UI ticks like live wall time. */
+const HISTORIC_CLOCK_TICK_MS = 1_000;
+/**
+ * Simulated ms per real ms when speedMultiplier === 1 (wall-clock parity).
+ * Use a higher speed multiplier to fast-forward through 1m chart bars faster.
+ */
+const HISTORIC_SIM_MS_PER_REAL_MS = 1;
+/** At 1× speed, scrubbing uses a short debounce; only fast-forward (`speedMultiplier` > 1) scales delay up to protect the API. */
+const HISTORIC_QUOTE_SCRUB_DEBOUNCE_MS = 120;
+/** Wall-clock interval between historic quote polls while playing at 1×. */
+const HISTORIC_QUOTE_POLL_BASE_MS = 400;
+/** Wait after simulated time moves before fetching news (bursts mainly while scrubbing at high speed). */
+const HISTORIC_NEWS_DEBOUNCE_MS = 450;
+
+function historicApiDelayMs(baseMs: number, speedMultiplier: number): number {
+  const speed = Number.isFinite(speedMultiplier) && speedMultiplier > 0 ? speedMultiplier : 1;
+  if (speed <= 1) {
+    return baseMs;
+  }
+  return Math.round(baseMs * speed);
+}
+
+function clampHistoricStartToTimeline(
+  sim: TradingSimulation,
+  symbol: string,
+  isoStart: string,
+): string {
+  const bounds = getSimulationTimelineBounds(sim, symbol);
+  if (!bounds) {
+    return isoStart;
+  }
+  const ms = new Date(isoStart).getTime();
+  return new Date(
+    Math.max(bounds.minMs, Math.min(bounds.maxMs, ms)),
+  ).toISOString();
+}
 
 function getEasternMarketSnapshot(now: Date) {
   const formatter = new Intl.DateTimeFormat("en-US", {
@@ -157,6 +199,25 @@ type TradeWorkspaceContextValue = {
   streamError: string | null;
   lastTickAt: string | null;
   clock: Date;
+  /** Historic vs live time behavior (separate from `tradeMode` manual/model). */
+  tradingTimeMode: TradingTimeMode;
+  /** Start of the historic window (ISO string), used when `tradingTimeMode === "historic"`. */
+  startDate: string | null;
+  /** Current point in simulated time for historic mode (ISO string). */
+  simulatedDate: string | null;
+  /** Playback speed when fast-forwarding historic simulation (1 = normal). */
+  speedMultiplier: number;
+  /** When true, historic simulated time does not advance (play/pause). */
+  historicPlaybackPaused: boolean;
+  setTradingTimeMode: (next: TradingTimeMode) => void;
+  setStartDate: (next: string | null) => void;
+  setSimulatedDate: (next: string | null) => void;
+  setSpeedMultiplier: (next: number) => void;
+  setHistoricPlaybackPaused: (
+    next: boolean | ((current: boolean) => boolean),
+  ) => void;
+  /** Anchor historic session to local start-of-day for `YYYY-MM-DD` (calendar input). */
+  beginHistoricSessionAt: (localDateInput: string) => void;
   marketSnapshot: { isOpen: boolean; statusLabel: string };
   simulation: TradingSimulation | null;
   simulationSnapshot: SimulationSnapshot | null;
@@ -169,7 +230,7 @@ type TradeWorkspaceContextValue = {
   refreshPaperAccount: (showLoading?: boolean) => Promise<void>;
   loadTrackedQuotes: (
     targetTickers: string[],
-    options?: { showLoading?: boolean },
+    options?: { showLoading?: boolean; asOf?: string },
   ) => Promise<void>;
   checkSelectedStocks: () => Promise<void>;
   selectTrackedTicker: (ticker: string) => void;
@@ -177,6 +238,7 @@ type TradeWorkspaceContextValue = {
   loadNewsReport: (options?: {
     forceRefresh?: boolean;
     showLoading?: boolean;
+    asOf?: string;
   }) => Promise<void>;
   runAutoTrade: () => Promise<void>;
   loadMockTradingDay: () => Promise<void>;
@@ -250,17 +312,192 @@ export function TradeWorkspaceProvider({
   const [streamError, setStreamError] = useState<string | null>(null);
   const [lastTickAt, setLastTickAt] = useState<string | null>(null);
   const [clock, setClock] = useState(() => new Date());
+  const [tradingTimeMode, setTradingTimeModeState] =
+    useState<TradingTimeMode>("live");
+  const [startDate, setStartDateState] = useState<string | null>(null);
+  const [simulatedDate, setSimulatedDateState] = useState<string | null>(null);
+  /** Bumped when the user applies a historic calendar anchor so flush logic runs even if dates are unchanged. */
+  const [historicSessionAnchorNonce, setHistoricSessionAnchorNonce] =
+    useState(0);
+  /** Bumped when historic quotes return with `asOf` so timelines rebuild to a stable window (not every simulated clock tick). */
+  const [historicChartEpoch, setHistoricChartEpoch] = useState(0);
+  const [speedMultiplier, setSpeedMultiplierState] = useState(1);
+  const [historicPlaybackPaused, setHistoricPlaybackPausedState] = useState(false);
+  const [liveSimulation, setLiveSimulation] = useState<TradingSimulation | null>(
+    null,
+  );
+  const [historicSimulation, setHistoricSimulation] =
+    useState<TradingSimulation | null>(null);
+  const [persistedSlices, setPersistedSlices] = useState<PersistedTradingSlices>({
+    live: null,
+    historic: null,
+  });
+  const persistedHistoricSliceRef = useRef(persistedSlices.historic);
+  persistedHistoricSliceRef.current = persistedSlices.historic;
+  const [hasHydratedLivePersisted, setHasHydratedLivePersisted] =
+    useState(false);
+  const [hasHydratedHistoricPersisted, setHasHydratedHistoricPersisted] =
+    useState(false);
   const [watchSyncTick, setWatchSyncTick] = useState(0);
   const skipInitialQuotesRefreshRef = useRef(false);
   const skipInitialPaperAccountRefreshRef = useRef(false);
   const skipInitialNewsRefreshRef = useRef(false);
 
+  const historicSimulationRef = useRef(historicSimulation);
+  historicSimulationRef.current = historicSimulation;
+  const historicSimTimeRef = useRef<string | null>(null);
+  const historicClockLastRealMsRef = useRef<number | null>(null);
+  const selectedTickerRef = useRef(selectedTicker);
+  selectedTickerRef.current = selectedTicker;
+  const trackedTickersRef = useRef(trackedTickers);
+  trackedTickersRef.current = trackedTickers;
+  const speedMultiplierRef = useRef(speedMultiplier);
+  speedMultiplierRef.current = speedMultiplier;
+  const historicPlaybackPausedRef = useRef(historicPlaybackPaused);
+  historicPlaybackPausedRef.current = historicPlaybackPaused;
+  const startDateRef = useRef(startDate);
+  startDateRef.current = startDate;
+  const simulatedDateRefForQuotes = useRef(simulatedDate);
+  simulatedDateRefForQuotes.current = simulatedDate;
+  const historicNewsFetchedKeyRef = useRef("");
+  const pendingHistoricStartIsoRef = useRef<string | null>(null);
+  /** ISO end of the loaded historic chart window (last `asOf` used for quote fetch); playhead moves inside without rebuilding bars each tick. */
+  const historicChartEndIsoRef = useRef<string | null>(null);
+  /** Suppress duplicate `showLoading` historic fetches while playing (same anchor + tickers); poller handles playhead updates. */
+  const lastHistoricQuoteBootstrapKeyRef = useRef<string>("");
+  /** Suppress duplicate live bootstrap quote loads when dependencies are effectively unchanged. */
+  const lastLiveQuoteBootstrapKeyRef = useRef<string>("");
+  /** Prevent bootstrap quote effect from recursively re-triggering while a loading fetch is active. */
+  const bootstrapQuotesInFlightRef = useRef(false);
+  /** Skip one bootstrap quotes effect run after `setTradingTimeMode` already refreshed quotes in a microtask. */
+  const suppressBootstrapQuotesEffectRef = useRef(false);
+  const preferencesLoadedRef = useRef(preferencesLoaded);
+  preferencesLoadedRef.current = preferencesLoaded;
+  const historicSessionAnchorNonceRef = useRef(historicSessionAnchorNonce);
+  historicSessionAnchorNonceRef.current = historicSessionAnchorNonce;
+  const clockRef = useRef(clock);
+  clockRef.current = clock;
+
   const marketSnapshot = useMemo(() => getEasternMarketSnapshot(clock), [clock]);
   const newsRefreshSeconds = refreshSecondsForCadence(refreshCadence);
+  const simulation = useMemo(
+    () =>
+      tradingTimeMode === "live" ? liveSimulation : historicSimulation,
+    [tradingTimeMode, liveSimulation, historicSimulation],
+  );
   const simulationSnapshot = useMemo(
     () => (simulation ? getSimulationSnapshot(simulation) : null),
     [simulation],
   );
+
+  useEffect(() => {
+    if (tradingTimeMode === "historic" && simulatedDate) {
+      historicSimTimeRef.current = simulatedDate;
+    }
+  }, [simulatedDate, tradingTimeMode]);
+
+  useEffect(() => {
+    if (tradingTimeMode !== "historic" || !historicSimulation) {
+      return;
+    }
+    setSimulatedDateState((prev) => {
+      if (prev) {
+        return prev;
+      }
+      const t = historicSimulation.simulationTime;
+      historicSimTimeRef.current = t;
+      return t;
+    });
+  }, [tradingTimeMode, historicSimulation]);
+
+  useEffect(() => {
+    if (tradingTimeMode !== "historic") {
+      lastHistoricQuoteBootstrapKeyRef.current = "";
+    }
+  }, [tradingTimeMode]);
+
+  useEffect(() => {
+    if (tradingTimeMode !== "live") {
+      lastLiveQuoteBootstrapKeyRef.current = "";
+    }
+  }, [tradingTimeMode]);
+
+  useEffect(() => {
+    if (tradingTimeMode !== "historic") {
+      historicClockLastRealMsRef.current = null;
+      return;
+    }
+
+    const id = window.setInterval(() => {
+      const sim = historicSimulationRef.current;
+      if (!sim) {
+        return;
+      }
+
+      if (historicPlaybackPausedRef.current) {
+        historicClockLastRealMsRef.current = performance.now();
+        return;
+      }
+
+      const speed = speedMultiplierRef.current;
+      if (speed <= 0) {
+        historicClockLastRealMsRef.current = performance.now();
+        return;
+      }
+
+      const symbol =
+        selectedTickerRef.current ||
+        trackedTickersRef.current[0] ||
+        Object.keys(sim.priceTimelineBySymbol)[0] ||
+        "";
+      if (!symbol) {
+        return;
+      }
+
+      const bounds = getSimulationTimelineBounds(sim, symbol);
+      if (!bounds) {
+        return;
+      }
+
+      const now = performance.now();
+      const last = historicClockLastRealMsRef.current;
+      historicClockLastRealMsRef.current = now;
+      const dtRealMs =
+        last === null
+          ? HISTORIC_CLOCK_TICK_MS
+          : Math.min(Math.max(0, now - last), 3_000);
+
+      let floorMs = bounds.minMs;
+      const sessionStart = startDateRef.current;
+      if (sessionStart) {
+        const sessionOpenMs = new Date(sessionStart).getTime();
+        if (!Number.isNaN(sessionOpenMs)) {
+          floorMs = Math.max(floorMs, sessionOpenMs);
+        }
+      }
+
+      const currentIso = historicSimTimeRef.current ?? sim.simulationTime;
+      const currentMs = new Date(currentIso).getTime();
+      const baseMs = Number.isNaN(currentMs) ? floorMs : currentMs;
+      let nextMs =
+        baseMs + dtRealMs * speed * HISTORIC_SIM_MS_PER_REAL_MS;
+      // Historic: no upper cap on simulated time (quotes use last bar; live mode caps via its own clock).
+      nextMs = Math.max(floorMs, nextMs);
+      const iso = new Date(nextMs).toISOString();
+
+      historicSimTimeRef.current = iso;
+      // Non-urgent updates so route transitions are not starved (mirrors live clock priority).
+      startTransition(() => {
+        setSimulatedDateState(iso);
+        setHistoricSimulation((s) => (s ? { ...s, simulationTime: iso } : s));
+      });
+    }, HISTORIC_CLOCK_TICK_MS);
+
+    return () => {
+      window.clearInterval(id);
+      historicClockLastRealMsRef.current = null;
+    };
+  }, [tradingTimeMode]);
 
   const applyWorkspaceSnapshot = useCallback(
     (
@@ -390,14 +627,27 @@ export function TradeWorkspaceProvider({
 
   useEffect(() => {
     if (!user?.uid) {
-      setPersistedTradingState(null);
-      setHasHydratedPersistedState(false);
+      pendingHistoricStartIsoRef.current = null;
+      historicChartEndIsoRef.current = null;
+      setPersistedSlices({ live: null, historic: null });
+      setHasHydratedLivePersisted(false);
+      setHasHydratedHistoricPersisted(false);
+      setLiveSimulation(null);
+      setHistoricSimulation(null);
       return;
     }
+    setPersistedSlices({ live: null, historic: null });
+    setHasHydratedLivePersisted(false);
+    setHasHydratedHistoricPersisted(false);
+    setLiveSimulation(null);
+    setHistoricSimulation(null);
+
     return subscribeToTradingState(
       user.uid,
       (next) => {
-        setPersistedTradingState(next);
+        setPersistedSlices((prev) =>
+          persistedTradingSlicesEqual(prev, next) ? prev : next,
+        );
       },
       (error) => {
         console.error("Trading-state sync disabled:", error);
@@ -406,10 +656,11 @@ export function TradeWorkspaceProvider({
   }, [user?.uid]);
 
   useEffect(() => {
-    if (!persistedTradingState) {
+    const livePositions = persistedSlices.live?.positions;
+    if (!livePositions) {
       return;
     }
-    const persistedSymbols = Object.keys(persistedTradingState.positions);
+    const persistedSymbols = Object.keys(livePositions);
     if (!persistedSymbols.length) {
       return;
     }
@@ -423,66 +674,199 @@ export function TradeWorkspaceProvider({
       }
       return next;
     });
-  }, [persistedTradingState, selectedTicker]);
+  }, [persistedSlices.live, selectedTicker]);
 
   useEffect(() => {
     if (!preferencesLoaded) {
       return;
     }
     if (!Object.keys(quotesByTicker).length) {
-      setSimulation(null);
+      setLiveSimulation(null);
+      setHistoricSimulation(null);
+      return;
+    }
+  }, [preferencesLoaded, quotesByTicker]);
+
+  useEffect(() => {
+    if (!preferencesLoaded || !Object.keys(quotesByTicker).length) {
       return;
     }
 
-    setSimulation((current) => {
-      const created = createSimulationFromQuotes(quotesByTicker, clock, selectedTicker);
-      if (!hasHydratedPersistedState && persistedTradingState) {
+    const createdForLive = createSimulationFromQuotes(
+      quotesByTicker,
+      clock,
+      selectedTicker,
+    );
+
+    setLiveSimulation((current) => {
+      if (tradingTimeMode !== "live") {
+        return current;
+      }
+      if (!hasHydratedLivePersisted && persistedSlices.live) {
+        const persisted = persistedSlices.live;
         const next = {
-          ...created,
-          cash: persistedTradingState.cash,
-          positions: persistedTradingState.positions,
-          trades: persistedTradingState.trades,
-          simulationTime:
-            persistedTradingState.simulationTime ?? created.simulationTime,
+          ...createdForLive,
+          cash: persisted.cash,
+          positions: persisted.positions,
+          trades: persisted.trades,
+          simulationTime: persisted.simulationTime ?? createdForLive.simulationTime,
         };
-        setHasHydratedPersistedState(true);
+        setHasHydratedLivePersisted(true);
         return next;
       }
       if (!current) {
-        return created;
+        return createdForLive;
       }
+      const sym =
+        selectedTicker && createdForLive.priceTimelineBySymbol[selectedTicker] !== undefined
+          ? selectedTicker
+          : Object.keys(createdForLive.priceTimelineBySymbol)[0] ?? "";
+      const len = sym ? createdForLive.priceTimelineBySymbol[sym]?.length ?? 0 : 0;
       return {
         ...current,
-        priceTimelineBySymbol: created.priceTimelineBySymbol,
-        simulationTime: created.priceTimelineBySymbol[selectedTicker]?.length
-          ? current.simulationTime
-          : created.simulationTime,
+        priceTimelineBySymbol: createdForLive.priceTimelineBySymbol,
+        simulationTime: len > 0 ? current.simulationTime : createdForLive.simulationTime,
       };
     });
   }, [
     clock,
-    hasHydratedPersistedState,
-    persistedTradingState,
+    hasHydratedLivePersisted,
+    persistedSlices.live,
     preferencesLoaded,
     quotesByTicker,
     selectedTicker,
+    tradingTimeMode,
   ]);
 
   useEffect(() => {
-    if (!user?.uid || !simulation) {
+    if (!preferencesLoaded || !Object.keys(quotesByTicker).length) {
+      return;
+    }
+
+    const endIso = historicChartEndIsoRef.current;
+    const fallbackIso = simulatedDateRefForQuotes.current;
+    const nowForHistoric =
+      endIso != null && endIso !== ""
+        ? new Date(endIso)
+        : fallbackIso != null
+          ? new Date(fallbackIso)
+          : clockRef.current;
+
+    const createdForHistoric = createSimulationFromQuotes(
+      quotesByTicker,
+      nowForHistoric,
+      selectedTicker,
+    );
+
+    setHistoricSimulation((current) => {
+      if (tradingTimeMode !== "historic") {
+        return current;
+      }
+      const persistedFromCloud = persistedHistoricSliceRef.current;
+      if (!hasHydratedHistoricPersisted && persistedFromCloud) {
+        const persisted = persistedFromCloud;
+        const next = {
+          ...createdForHistoric,
+          cash: persisted.cash,
+          positions: persisted.positions,
+          trades: persisted.trades,
+          simulationTime: persisted.simulationTime ?? createdForHistoric.simulationTime,
+        };
+        setHasHydratedHistoricPersisted(true);
+        return next;
+      }
+      if (!current) {
+        return { ...createdForHistoric };
+      }
+      const sym =
+        selectedTicker &&
+        createdForHistoric.priceTimelineBySymbol[selectedTicker] !== undefined
+          ? selectedTicker
+          : Object.keys(createdForHistoric.priceTimelineBySymbol)[0] ?? "";
+      const len = sym
+        ? createdForHistoric.priceTimelineBySymbol[sym]?.length ?? 0
+        : 0;
+      return {
+        ...current,
+        priceTimelineBySymbol: createdForHistoric.priceTimelineBySymbol,
+        simulationTime: len > 0 ? current.simulationTime : createdForHistoric.simulationTime,
+      };
+    });
+  }, [
+    hasHydratedHistoricPersisted,
+    historicChartEpoch,
+    historicSessionAnchorNonce,
+    preferencesLoaded,
+    quotesByTicker,
+    selectedTicker,
+    tradingTimeMode,
+  ]);
+
+  useEffect(() => {
+    void historicSessionAnchorNonce;
+    const pending = pendingHistoricStartIsoRef.current;
+    if (tradingTimeMode !== "historic" || !pending || !historicSimulation) {
+      return;
+    }
+    const symbol =
+      selectedTickerRef.current ||
+      trackedTickersRef.current[0] ||
+      Object.keys(historicSimulation.priceTimelineBySymbol)[0] ||
+      "";
+    if (!symbol) {
+      return;
+    }
+    const points =
+      historicSimulation.priceTimelineBySymbol[symbol] ??
+      Object.values(historicSimulation.priceTimelineBySymbol)[0] ??
+      [];
+    if (!points.length) {
+      return;
+    }
+    const simTime = clampHistoricStartToTimeline(
+      historicSimulation,
+      symbol,
+      pending,
+    );
+    pendingHistoricStartIsoRef.current = null;
+    historicSimTimeRef.current = simTime;
+    setSimulatedDateState(simTime);
+    setHistoricSimulation((s) =>
+      s ? { ...s, simulationTime: simTime } : s,
+    );
+  }, [historicSessionAnchorNonce, historicSimulation, tradingTimeMode]);
+
+  useEffect(() => {
+    if (!user?.uid || !liveSimulation) {
       return;
     }
     const timer = window.setTimeout(() => {
-      void saveTradingState(user.uid, {
-        cash: simulation.cash,
-        positions: simulation.positions,
-        trades: simulation.trades,
-        simulationTime: simulation.simulationTime,
+      void saveTradingState(user.uid, "live", {
+        cash: liveSimulation.cash,
+        positions: liveSimulation.positions,
+        trades: liveSimulation.trades,
+        simulationTime: liveSimulation.simulationTime,
       });
     }, WORKSPACE_PERSIST_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timer);
-  }, [simulation, user?.uid]);
+  }, [liveSimulation, user?.uid]);
+
+  useEffect(() => {
+    if (!user?.uid || !historicSimulation) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void saveTradingState(user.uid, "historic", {
+        cash: historicSimulation.cash,
+        positions: historicSimulation.positions,
+        trades: historicSimulation.trades,
+        simulationTime: historicSimulation.simulationTime,
+      });
+    }, WORKSPACE_PERSIST_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [historicSimulation, user?.uid]);
 
   const refreshPortfolio = useCallback(
     async (options: { background?: boolean } = {}) => {
@@ -562,7 +946,7 @@ export function TradeWorkspaceProvider({
   const loadTrackedQuotes = useCallback(
     async (
       targetTickers: string[],
-      options: { showLoading?: boolean } = {},
+      options: { showLoading?: boolean; asOf?: string } = {},
     ) => {
       const symbols = normalizeTrackedTickers(targetTickers);
       if (!symbols.length) {
@@ -574,7 +958,10 @@ export function TradeWorkspaceProvider({
       }
 
       try {
-        const batch = await fetchStockQuotes(symbols, { modelProfile });
+        const batch = await fetchStockQuotes(symbols, {
+          modelProfile,
+          ...(options.asOf ? { asOf: options.asOf } : {}),
+        });
         const nextQuotes: MockQuote[] = batch.results;
         const failures = batch.errors.map(
           (error) => `${error.ticker}: ${error.message}`,
@@ -591,6 +978,18 @@ export function TradeWorkspaceProvider({
         }
 
         setError(failures.length ? failures.join(" ") : null);
+
+        if (options.asOf && nextQuotes.length) {
+          historicChartEndIsoRef.current = options.asOf;
+          // Like live mode: background polls only merge quotes; full chart rebuild on bootstrap / loading fetches.
+          if (options.showLoading) {
+            setHistoricChartEpoch((e) => e + 1);
+          }
+        }
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Could not load quotes.",
+        );
       } finally {
         if (options.showLoading) {
           setLoading(false);
@@ -600,8 +999,24 @@ export function TradeWorkspaceProvider({
     [modelProfile],
   );
 
+  const loadTrackedQuotesRef = useRef(loadTrackedQuotes);
+  loadTrackedQuotesRef.current = loadTrackedQuotes;
+
+  const trackedTickersKey = useMemo(
+    () => normalizeTrackedTickers(trackedTickers).join(","),
+    [trackedTickers],
+  );
+
   useEffect(() => {
-    if (!preferencesLoaded || !trackedTickers.length) {
+    if (!preferencesLoaded || !trackedTickersKey) {
+      return;
+    }
+    if (bootstrapQuotesInFlightRef.current) {
+      return;
+    }
+
+    if (suppressBootstrapQuotesEffectRef.current) {
+      suppressBootstrapQuotesEffectRef.current = false;
       return;
     }
 
@@ -610,8 +1025,126 @@ export function TradeWorkspaceProvider({
       return;
     }
 
-    void loadTrackedQuotes(trackedTickers, { showLoading: true });
-  }, [loadTrackedQuotes, preferencesLoaded, trackedTickers]);
+    const stableTickers = trackedTickersKey.split(",").filter(Boolean);
+    const load = loadTrackedQuotesRef.current;
+
+    if (tradingTimeMode === "historic") {
+      const asOf =
+        simulatedDateRefForQuotes.current ??
+        historicSimulationRef.current?.simulationTime ??
+        undefined;
+      if (!asOf) {
+        return;
+      }
+      const bootstrapKey = `${historicSessionAnchorNonce}|${startDate ?? ""}|${trackedTickersKey}|${modelProfile}`;
+      if (bootstrapKey === lastHistoricQuoteBootstrapKeyRef.current) {
+        return;
+      }
+      lastHistoricQuoteBootstrapKeyRef.current = bootstrapKey;
+      bootstrapQuotesInFlightRef.current = true;
+      void load(stableTickers, { showLoading: true, asOf }).finally(() => {
+        bootstrapQuotesInFlightRef.current = false;
+      });
+      return;
+    }
+
+    const liveBootstrapKey = `${trackedTickersKey}|${modelProfile}`;
+    if (liveBootstrapKey === lastLiveQuoteBootstrapKeyRef.current) {
+      return;
+    }
+    lastLiveQuoteBootstrapKeyRef.current = liveBootstrapKey;
+    bootstrapQuotesInFlightRef.current = true;
+    void load(stableTickers, { showLoading: true }).finally(() => {
+      bootstrapQuotesInFlightRef.current = false;
+    });
+  }, [
+    historicSessionAnchorNonce,
+    modelProfile,
+    preferencesLoaded,
+    startDate,
+    trackedTickersKey,
+    tradingTimeMode,
+  ]);
+
+  /** Historic quotes while playing: poll on a fixed wall-clock interval that grows with playback speed (faster sim ⇒ longer gap between API calls). */
+  useEffect(() => {
+    if (!preferencesLoaded || !trackedTickers.length) {
+      return;
+    }
+    if (tradingTimeMode !== "historic" || historicPlaybackPaused) {
+      return;
+    }
+
+    const periodMs = historicApiDelayMs(HISTORIC_QUOTE_POLL_BASE_MS, speedMultiplier);
+
+    const tick = () => {
+      const asOf =
+        simulatedDateRefForQuotes.current ??
+        historicSimulationRef.current?.simulationTime;
+      if (!asOf) {
+        return;
+      }
+      void loadTrackedQuotes(trackedTickers, { showLoading: false, asOf });
+    };
+
+    void tick();
+    const id = window.setInterval(tick, periodMs);
+    return () => window.clearInterval(id);
+  }, [
+    historicPlaybackPaused,
+    historicSessionAnchorNonce,
+    loadTrackedQuotes,
+    preferencesLoaded,
+    speedMultiplier,
+    startDate,
+    tradingTimeMode,
+    trackedTickers,
+  ]);
+
+  /** Historic quotes while paused: debounce scrubbing; delay also scales with speed so rapid stepping stays gentle on the API. */
+  useEffect(() => {
+    if (!preferencesLoaded || !trackedTickers.length) {
+      return;
+    }
+    if (tradingTimeMode !== "historic" || !historicPlaybackPaused) {
+      return;
+    }
+
+    if (
+      !(
+        simulatedDateRefForQuotes.current ??
+        historicSimulationRef.current?.simulationTime
+      )
+    ) {
+      return;
+    }
+
+    const debounceMs = historicApiDelayMs(
+      HISTORIC_QUOTE_SCRUB_DEBOUNCE_MS,
+      speedMultiplier,
+    );
+    const handle = window.setTimeout(() => {
+      const latestAsOf =
+        simulatedDateRefForQuotes.current ??
+        historicSimulationRef.current?.simulationTime;
+      if (!latestAsOf) {
+        return;
+      }
+      void loadTrackedQuotes(trackedTickers, { showLoading: false, asOf: latestAsOf });
+    }, debounceMs);
+
+    return () => window.clearTimeout(handle);
+  }, [
+    historicPlaybackPaused,
+    historicSessionAnchorNonce,
+    loadTrackedQuotes,
+    preferencesLoaded,
+    simulatedDate,
+    speedMultiplier,
+    startDate,
+    tradingTimeMode,
+    trackedTickers,
+  ]);
 
   const checkSelectedStocks = useCallback(async () => {
     if (!trackedTickers.length) {
@@ -623,8 +1156,21 @@ export function TradeWorkspaceProvider({
     setLastAction(null);
     setMockTradingDay(null);
     setMockTradingError(null);
-    await loadTrackedQuotes(trackedTickers, { showLoading: true });
-  }, [loadTrackedQuotes, trackedTickers]);
+    const asOf =
+      tradingTimeMode === "historic"
+        ? (simulatedDate ?? historicSimulation?.simulationTime ?? undefined)
+        : undefined;
+    await loadTrackedQuotes(trackedTickers, {
+      showLoading: true,
+      ...(asOf ? { asOf } : {}),
+    });
+  }, [
+    loadTrackedQuotes,
+    trackedTickers,
+    tradingTimeMode,
+    simulatedDate,
+    historicSimulation?.simulationTime,
+  ]);
 
   const selectTrackedTicker = useCallback((ticker: string) => {
     setSelectedTicker(ticker);
@@ -663,10 +1209,24 @@ export function TradeWorkspaceProvider({
   }, []);
 
   const loadNewsReport = useCallback(
-    async (options: { forceRefresh?: boolean; showLoading?: boolean } = {}) => {
+    async (options: {
+      forceRefresh?: boolean;
+      showLoading?: boolean;
+      asOf?: string;
+    } = {}) => {
       const raw = selectedTicker || trackedTickers[0] || "";
       if (!raw) {
         return;
+      }
+
+      const resolvedAsOf =
+        options.asOf ??
+        (tradingTimeMode === "historic"
+          ? simulatedDateRefForQuotes.current ?? undefined
+          : undefined);
+
+      if (options.forceRefresh && resolvedAsOf) {
+        historicNewsFetchedKeyRef.current = "";
       }
 
       if (options.showLoading) {
@@ -678,12 +1238,21 @@ export function TradeWorkspaceProvider({
           modelProfile,
           refreshSeconds: newsRefreshSeconds,
           forceRefresh: options.forceRefresh,
+          ...(resolvedAsOf ? { asOf: resolvedAsOf } : {}),
         });
         setNewsReportsByTicker((current) => ({
           ...current,
           [report.ticker]: report,
         }));
         setNewsReportError(null);
+        if (resolvedAsOf) {
+          const day = resolvedAsOf.slice(0, 10);
+          if (/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+            historicNewsFetchedKeyRef.current = `${report.ticker}|${day}`;
+          }
+        } else {
+          historicNewsFetchedKeyRef.current = "";
+        }
       } catch (err) {
         setNewsReportError(
           err instanceof Error ? err.message : "Could not load news report.",
@@ -694,7 +1263,7 @@ export function TradeWorkspaceProvider({
         }
       }
     },
-    [modelProfile, newsRefreshSeconds, selectedTicker, trackedTickers],
+    [modelProfile, newsRefreshSeconds, selectedTicker, trackedTickers, tradingTimeMode],
   );
 
   const runAutoTrade = useCallback(async () => {
@@ -826,7 +1395,7 @@ export function TradeWorkspaceProvider({
         if (cancelled) {
           return;
         }
-        if (session.quotes.length) {
+        if (session.quotes.length && tradingTimeMode === "live") {
           setQuotesByTicker((current) => {
             const merged = { ...current };
             for (const quote of session.quotes) {
@@ -849,7 +1418,7 @@ export function TradeWorkspaceProvider({
     return () => {
       cancelled = true;
     };
-  }, [accountUserId, trackedTickers.length, watchSyncTick]);
+  }, [accountUserId, trackedTickers.length, tradingTimeMode, watchSyncTick]);
 
   useEffect(() => {
     if (!autoTradeEnabled || tradeMode !== "model" || !marketSnapshot.isOpen) {
@@ -860,7 +1429,53 @@ export function TradeWorkspaceProvider({
   }, [autoTradeEnabled, marketSnapshot.isOpen, runAutoTrade, tradeMode]);
 
   useEffect(() => {
+    if (tradingTimeMode === "live") {
+      historicNewsFetchedKeyRef.current = "";
+    }
+  }, [tradingTimeMode]);
+
+  useEffect(() => {
+    if (tradingTimeMode !== "historic" || !selectedTicker) {
+      return;
+    }
+    const asOf = simulatedDateRefForQuotes.current;
+    if (!asOf) {
+      return;
+    }
+    const dayUtc = asOf.slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dayUtc)) {
+      return;
+    }
+    const fetchKey = `${selectedTicker}|${dayUtc}`;
+    if (historicNewsFetchedKeyRef.current === fetchKey) {
+      return;
+    }
+
+    const debounceMs = historicApiDelayMs(HISTORIC_NEWS_DEBOUNCE_MS, speedMultiplier);
+    const timer = window.setTimeout(() => {
+      if (historicNewsFetchedKeyRef.current === fetchKey) {
+        return;
+      }
+      void loadNewsReport({ showLoading: true, asOf });
+    }, debounceMs);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    historicSessionAnchorNonce,
+    loadNewsReport,
+    selectedTicker,
+    simulatedDate,
+    speedMultiplier,
+    startDate,
+    tradingTimeMode,
+  ]);
+
+  useEffect(() => {
     if (!selectedTicker) {
+      return;
+    }
+
+    if (tradingTimeMode === "historic") {
       return;
     }
 
@@ -875,7 +1490,7 @@ export function TradeWorkspaceProvider({
     }, CADENCE_MS[refreshCadence]);
 
     return () => window.clearInterval(timer);
-  }, [loadNewsReport, refreshCadence, selectedTicker]);
+  }, [loadNewsReport, refreshCadence, selectedTicker, tradingTimeMode]);
 
   useEffect(() => {
     if (!trackedTickers.length || !marketSnapshot.isOpen) {
@@ -885,7 +1500,7 @@ export function TradeWorkspaceProvider({
 
     let ws: WebSocket | null = null;
     
-    // Add a debounce to entirely avoid the Alpaca "1 connection" API limit during fast hot-reloads
+    // Brief delay to avoid the Alpaca "1 connection" limit during fast hot-reloads / reconnect storms
     const timer = window.setTimeout(() => {
       const symbolsParam = trackedTickers.join(",");
       ws = new WebSocket(
@@ -952,7 +1567,7 @@ export function TradeWorkspaceProvider({
       ws.onclose = () => {
         setStreamConnected(false);
       };
-    }, 500);
+    }, 100);
 
     return () => {
       window.clearTimeout(timer);
@@ -997,22 +1612,32 @@ export function TradeWorkspaceProvider({
         setLastAction("Select a ticker before placing a trade.");
         return;
       }
-      if (!simulation) {
-        setLastAction("Simulation is still loading price history.");
-        return;
-      }
-      try {
-        const next = executeTrade(simulation, orderTicker, shares, side);
-        setSimulation(next);
-        const trade = next.trades[next.trades.length - 1];
-        setLastAction(
-          `${side === "buy" ? "Bought" : "Sold"} ${trade.shares} ${trade.symbol} @ $${trade.price.toFixed(2)} (sim ${new Date(trade.timestamp).toLocaleString()})`,
-        );
-      } catch (err) {
-        setLastAction(err instanceof Error ? err.message : "Trade failed.");
+
+      const applyTo = (sim: TradingSimulation | null) => {
+        if (!sim) {
+          setLastAction("Simulation is still loading price history.");
+          return sim;
+        }
+        try {
+          const next = executeTrade(sim, orderTicker, shares, side);
+          const trade = next.trades[next.trades.length - 1];
+          setLastAction(
+            `${side === "buy" ? "Bought" : "Sold"} ${trade.shares} ${trade.symbol} @ $${trade.price.toFixed(2)} (sim ${new Date(trade.timestamp).toLocaleString()})`,
+          );
+          return next;
+        } catch (err) {
+          setLastAction(err instanceof Error ? err.message : "Trade failed.");
+          return sim;
+        }
+      };
+
+      if (tradingTimeMode === "live") {
+        setLiveSimulation((sim) => applyTo(sim));
+      } else {
+        setHistoricSimulation((sim) => applyTo(sim));
       }
     },
-    [quotesByTicker, selectedTicker, simulation],
+    [quotesByTicker, selectedTicker, tradingTimeMode],
   );
 
   const advanceSimulationTime = useCallback(
@@ -1021,28 +1646,51 @@ export function TradeWorkspaceProvider({
       if (!symbol) {
         return;
       }
-      setSimulation((current) =>
-        current ? shiftSimulationTime(current, symbol, deltaSteps) : current,
-      );
+      const bump = (current: TradingSimulation | null) =>
+        current ? shiftSimulationTime(current, symbol, deltaSteps) : current;
+      if (tradingTimeMode === "live") {
+        setLiveSimulation(bump);
+      } else {
+        setHistoricSimulation((current) => {
+          const next = bump(current);
+          if (next?.simulationTime) {
+            historicSimTimeRef.current = next.simulationTime;
+            setSimulatedDateState(next.simulationTime);
+          }
+          return next;
+        });
+      }
     },
-    [selectedTicker, trackedTickers],
+    [selectedTicker, trackedTickers, tradingTimeMode],
   );
 
   const resetSimulationTime = useCallback(() => {
-    if (!simulation) return;
     const symbol = selectedTicker || trackedTickers[0];
     if (!symbol) return;
-    const points = simulation.priceTimelineBySymbol[symbol] ?? [];
-    if (!points.length) return;
-    setSimulation((current) =>
-      current
-        ? {
-            ...current,
-            simulationTime: points[points.length - 1].time,
-          }
-        : current,
-    );
-  }, [selectedTicker, simulation, trackedTickers]);
+
+    const reset = (current: TradingSimulation | null) => {
+      if (!current) return current;
+      const points = current.priceTimelineBySymbol[symbol] ?? [];
+      if (!points.length) return current;
+      return {
+        ...current,
+        simulationTime: points[points.length - 1].time,
+      };
+    };
+
+    if (tradingTimeMode === "live") {
+      setLiveSimulation(reset);
+    } else {
+      setHistoricSimulation((current) => {
+        const next = reset(current);
+        if (next?.simulationTime) {
+          historicSimTimeRef.current = next.simulationTime;
+          setSimulatedDateState(next.simulationTime);
+        }
+        return next;
+      });
+    }
+  }, [selectedTicker, trackedTickers, tradingTimeMode]);
 
   const clearPaperTradeLog = useCallback(() => {
     setPaperTradeLog([]);
@@ -1093,6 +1741,85 @@ export function TradeWorkspaceProvider({
     [],
   );
 
+  const setTradingTimeMode = useCallback((next: TradingTimeMode) => {
+    setTradingTimeModeState(next);
+    if (next === "live") {
+      setHistoricPlaybackPausedState(false);
+      pendingHistoricStartIsoRef.current = null;
+      historicChartEndIsoRef.current = null;
+    } else {
+      historicNewsFetchedKeyRef.current = "";
+    }
+
+    queueMicrotask(() => {
+      if (!preferencesLoadedRef.current) {
+        return;
+      }
+      const tickers = normalizeTrackedTickers(trackedTickersRef.current);
+      if (!tickers.length) {
+        return;
+      }
+      const load = loadTrackedQuotesRef.current;
+      let didQuotes = false;
+      if (next === "historic") {
+        const asOf =
+          simulatedDateRefForQuotes.current ??
+          historicSimulationRef.current?.simulationTime;
+        if (asOf) {
+          const key = `${historicSessionAnchorNonceRef.current}|${startDateRef.current ?? ""}|${tickers.join(",")}`;
+          lastHistoricQuoteBootstrapKeyRef.current = key;
+          void load(tickers, { showLoading: true, asOf });
+          didQuotes = true;
+        }
+      } else {
+        void load(tickers, { showLoading: true });
+        didQuotes = true;
+      }
+      if (didQuotes) {
+        suppressBootstrapQuotesEffectRef.current = true;
+      }
+    });
+  }, []);
+
+  const beginHistoricSessionAt = useCallback((localDateInput: string) => {
+    let isoStart: string;
+    try {
+      isoStart = localDateInputToUsMarketOpenIso(localDateInput);
+    } catch {
+      return;
+    }
+    historicNewsFetchedKeyRef.current = "";
+    historicChartEndIsoRef.current = null;
+    setStartDateState(isoStart);
+    pendingHistoricStartIsoRef.current = isoStart;
+    historicSimTimeRef.current = isoStart;
+    setSimulatedDateState(isoStart);
+    setHistoricSessionAnchorNonce((n) => n + 1);
+  }, []);
+
+  const setStartDate = useCallback((next: string | null) => {
+    setStartDateState(next);
+  }, []);
+
+  const setSimulatedDate = useCallback((next: string | null) => {
+    setSimulatedDateState(next);
+  }, []);
+
+  const setSpeedMultiplier = useCallback((next: number) => {
+    setSpeedMultiplierState(next);
+  }, []);
+
+  const setHistoricPlaybackPaused = useCallback(
+    (next: boolean | ((current: boolean) => boolean)) => {
+      setHistoricPlaybackPausedState((current) =>
+        typeof next === "function"
+          ? (next as (c: boolean) => boolean)(current)
+          : next,
+      );
+    },
+    [],
+  );
+
   const tradeValue = useMemo<TradeWorkspaceContextValue>(
     () => ({
       accountUserId,
@@ -1124,6 +1851,17 @@ export function TradeWorkspaceProvider({
       streamError,
       lastTickAt,
       clock,
+      tradingTimeMode,
+      startDate,
+      simulatedDate,
+      speedMultiplier,
+      historicPlaybackPaused,
+      setTradingTimeMode,
+      setStartDate,
+      setSimulatedDate,
+      setSpeedMultiplier,
+      setHistoricPlaybackPaused,
+      beginHistoricSessionAt,
       marketSnapshot,
       simulation,
       simulationSnapshot,
@@ -1175,6 +1913,17 @@ export function TradeWorkspaceProvider({
       streamError,
       lastTickAt,
       clock,
+      tradingTimeMode,
+      startDate,
+      simulatedDate,
+      speedMultiplier,
+      historicPlaybackPaused,
+      setTradingTimeMode,
+      setStartDate,
+      setSimulatedDate,
+      setSpeedMultiplier,
+      setHistoricPlaybackPaused,
+      beginHistoricSessionAt,
       marketSnapshot,
       simulation,
       simulationSnapshot,
@@ -1194,6 +1943,7 @@ export function TradeWorkspaceProvider({
       loadMockTradingDay,
       simulateOrder,
       clearPaperTradeLog,
+      setLastAction,
     ],
   );
 

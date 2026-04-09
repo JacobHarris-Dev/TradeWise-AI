@@ -17,7 +17,10 @@ function formatMoney(value: number) {
 export function DashboardPage() {
   const { user, loading: authLoading } = useAuth();
   const { portfolio } = usePortfolioWorkspace();
-  const { trackedTickers } = useTradeWorkspace();
+  const { trackedTickers, simulationSnapshot, tradingTimeMode } = useTradeWorkspace();
+
+  const useHistoricSim =
+    tradingTimeMode === "historic" && simulationSnapshot != null;
 
   const welcomeLine = (() => {
     if (authLoading) return "Welcome back";
@@ -25,11 +28,21 @@ export function DashboardPage() {
     return `Welcome, ${user.displayName?.trim() || user.email?.split("@")[0] || "Trader"}`;
   })();
 
-  const holdingsValue = portfolio?.positionsValue ?? 0;
-  const totalEquity = portfolio?.totalEquity ?? portfolio?.cash ?? 0;
-  const buyingPower = portfolio?.cash ?? 0;
-  const activePositions = portfolio?.positions.length ?? 0;
-  const baselineEquity = portfolio?.baselineEquity ?? portfolio?.startingCash ?? 10000;
+  const holdingsValue = useHistoricSim
+    ? simulationSnapshot.portfolioValue - simulationSnapshot.cash
+    : portfolio?.positionsValue ?? 0;
+  const totalEquity = useHistoricSim
+    ? simulationSnapshot.portfolioValue
+    : portfolio?.totalEquity ?? portfolio?.cash ?? 0;
+  const buyingPower = useHistoricSim
+    ? simulationSnapshot.cash
+    : portfolio?.cash ?? 0;
+  const activePositions = useHistoricSim
+    ? simulationSnapshot.positions.length
+    : portfolio?.positions.length ?? 0;
+  const baselineEquity = useHistoricSim
+    ? 10_000
+    : portfolio?.baselineEquity ?? portfolio?.startingCash ?? 10000;
   const totalReturn = totalEquity - baselineEquity;
 
   return (
@@ -77,7 +90,8 @@ export function DashboardPage() {
                 ${formatMoney(totalEquity)}
               </div>
               <p className="mt-1 text-xs text-slate-400">
-                {totalReturn >= 0 ? "+" : "-"}${formatMoney(Math.abs(totalReturn))} all time
+                {totalReturn >= 0 ? "+" : "-"}${formatMoney(Math.abs(totalReturn))}{" "}
+                {useHistoricSim ? "vs session start" : "all time"}
               </p>
             </div>
 

@@ -5,7 +5,11 @@ from . import MODEL_VERSION
 from .engine import build_quote_response, build_quote_responses
 from .live_stream import relay_live_trade_stream
 from .mock_trading import DEFAULT_MOCK_STEPS, MAX_MOCK_STEPS, MIN_MOCK_STEPS, build_mock_trading_day_response
-from .news import build_market_news_snapshot, build_news_context_snapshot
+from .news import (
+    build_market_news_snapshot,
+    build_news_context_snapshot,
+    build_news_context_snapshot_for_as_of,
+)
 from .news_reasoning import build_investment_chat_reply, build_student_news_reasoning
 from .paper_account import get_paper_account, grant_paper_position
 from .paper_portfolio import build_paper_account_performance
@@ -53,6 +57,7 @@ def get_quote(
     include_chart: bool = Query(False, alias="includeChart"),
     model_profile: str | None = Query(None, alias="modelProfile"),
     chart_type: str | None = Query(None, alias="chartType"),
+    as_of: str | None = Query(None, alias="asOf", max_length=128),
 ) -> QuoteResponse:
     try:
         return build_quote_response(
@@ -60,6 +65,7 @@ def get_quote(
             include_chart=include_chart,
             model_profile=model_profile,
             chart_type=chart_type,
+            as_of=as_of,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -74,6 +80,7 @@ def get_quotes(
     model_profile: str | None = Query(None, alias="modelProfile"),
     chart_type: str | None = Query(None, alias="chartType"),
     provider: str | None = Query(None, alias="provider"),
+    as_of: str | None = Query(None, alias="asOf", max_length=128),
 ) -> QuoteBatchResponse:
     try:
         return build_quote_responses(
@@ -82,6 +89,7 @@ def get_quotes(
             model_profile=model_profile,
             chart_type=chart_type,
             provider=provider,
+            as_of=as_of,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -188,20 +196,36 @@ def get_news_report(
     model_profile: str | None = Query(None, alias="modelProfile"),
     refresh_seconds: int | None = Query(None, alias="refreshSeconds", ge=0, le=3600),
     force_refresh: bool = Query(False, alias="forceRefresh"),
+    as_of: str | None = Query(None, alias="asOf", max_length=128),
 ) -> NewsReportResponse:
     try:
-        snapshot = build_news_context_snapshot(
-            ticker,
-            refresh_seconds=refresh_seconds,
-            force_refresh=force_refresh,
-        )
-        quote = build_quote_response(
-            ticker,
-            include_chart=False,
-            model_profile=model_profile,
-            chart_type="line",
-            news_context_override=snapshot.context,
-        )
+        if as_of:
+            snapshot = build_news_context_snapshot_for_as_of(
+                ticker,
+                as_of,
+                force_refresh=force_refresh,
+            )
+            quote = build_quote_response(
+                ticker,
+                include_chart=False,
+                model_profile=model_profile,
+                chart_type="line",
+                news_context_override=snapshot.context,
+                as_of=as_of,
+            )
+        else:
+            snapshot = build_news_context_snapshot(
+                ticker,
+                refresh_seconds=refresh_seconds,
+                force_refresh=force_refresh,
+            )
+            quote = build_quote_response(
+                ticker,
+                include_chart=False,
+                model_profile=model_profile,
+                chart_type="line",
+                news_context_override=snapshot.context,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

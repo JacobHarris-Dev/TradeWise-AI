@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import sys
 from unittest.mock import Mock, patch
@@ -21,6 +21,9 @@ class MarketDataTestCase(unittest.TestCase):
     def setUp(self) -> None:
         with market_data._PRICE_HISTORY_CACHE_LOCK:
             market_data._PRICE_HISTORY_CACHE.clear()
+        with market_data._ALPACA_SHARED_LOCK:
+            market_data._ALPACA_CLIENT_INSTANCE = None
+            market_data._ALPACA_LAST_REQUEST_AT_MONO = 0.0
 
     def test_download_price_history_rejects_invalid_provider(self) -> None:
         with self.assertRaisesRegex(ValueError, "Invalid market data provider"):
@@ -133,6 +136,38 @@ class MarketDataTestCase(unittest.TestCase):
         self.assertTrue(second.equals(history))
         self.assertIsNot(first, second)
         mock_yfinance.assert_called_once()
+
+    def test_download_alpaca_price_history_retries_on_rate_limit(self) -> None:
+        bars_df = pd.DataFrame(
+            {"close": [100.0]},
+            index=pd.DatetimeIndex([pd.Timestamp("2024-01-02", tz=UTC)]),
+        )
+        mock_bars = Mock()
+        mock_bars.df = bars_df
+        client = Mock()
+        client.get_stock_bars = Mock(
+            side_effect=[
+                RuntimeError('{"message": "too many requests."}'),
+                mock_bars,
+            ]
+        )
+
+        with (
+            patch("tradewise_backend.market_data._alpaca_client_locked", return_value=client),
+            patch("tradewise_backend.market_data.StockBarsRequest", Mock()),
+            patch("tradewise_backend.market_data._parse_alpaca_timeframe", return_value=Mock()),
+            patch("tradewise_backend.market_data._parse_alpaca_feed", return_value=Mock()),
+            patch(
+                "tradewise_backend.market_data._resolve_alpaca_end",
+                return_value=datetime.now(UTC),
+            ),
+            patch("tradewise_backend.market_data.time.sleep", Mock()),
+        ):
+            result = market_data._download_alpaca_price_history("AAPL")
+
+        self.assertEqual(client.get_stock_bars.call_count, 2)
+        self.assertIn("Close", result.columns)
+        self.assertEqual(float(result["Close"].iloc[-1]), 100.0)
 
     def test_get_close_history_handles_2d_close_frame(self) -> None:
         rows = 65
