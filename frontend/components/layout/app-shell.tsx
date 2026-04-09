@@ -10,6 +10,7 @@ import {
   Settings,
 } from "lucide-react";
 import { BrandIcon } from "@/components/brand/brand-icon";
+import { TradingTimeModeStrip } from "@/components/layout/trading-time-mode-strip";
 import { useAuth } from "@/components/providers/auth-provider";
 import { usePortfolioWorkspace } from "@/components/providers/trade-workspace-provider";
 
@@ -142,6 +143,7 @@ export function AppShell({ children }: AppShellProps) {
         </header>
 
         <div className="flex-1 overflow-auto px-4 py-4 pb-24 md:px-6 md:py-6 md:pb-8 lg:px-8">
+          <TradingTimeModeStrip />
           {children}
         </div>
       </main>

@@ -31,6 +31,109 @@ export const TRADE_WORKSPACE_TTL_MS = 90_000;
 
 export type TradeMode = "manual" | "model";
 
+/** Historic = trade against a fixed start window with simulated clock; live = real-time behavior. */
+export type TradingTimeMode = "historic" | "live";
+
+/**
+ * Parse `YYYY-MM-DD` from `<input type="date">` into ISO for local start-of-day (midnight).
+ */
+export function localDateInputToIsoStartOfDay(dateInput: string): string {
+  const parts = dateInput.split("-");
+  if (parts.length !== 3) {
+    throw new Error("Invalid date format.");
+  }
+  const y = Number(parts[0]);
+  const m = Number(parts[1]);
+  const d = Number(parts[2]);
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) {
+    throw new Error("Invalid date.");
+  }
+  const local = new Date(y, m - 1, d, 0, 0, 0, 0);
+  if (
+    local.getFullYear() !== y ||
+    local.getMonth() !== m - 1 ||
+    local.getDate() !== d
+  ) {
+    throw new Error("Invalid calendar date.");
+  }
+  return local.toISOString();
+}
+
+const NY_MARKET_TZ = "America/New_York";
+
+/**
+ * Regular-session open (9:30 AM) on `YYYY-MM-DD` interpreted as a **New York calendar date**
+ * (NYSE session day), returned as ISO UTC.
+ */
+export function localDateInputToUsMarketOpenIso(dateInput: string): string {
+  const parts = dateInput.split("-");
+  if (parts.length !== 3) {
+    throw new Error("Invalid date format.");
+  }
+  const y = Number(parts[0]);
+  const mo = Number(parts[1]);
+  const d = Number(parts[2]);
+  if (!Number.isInteger(y) || !Number.isInteger(mo) || !Number.isInteger(d)) {
+    throw new Error("Invalid date.");
+  }
+
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: NY_MARKET_TZ,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    hour12: false,
+  });
+
+  const lo = Date.UTC(y, mo - 1, d - 1, 0, 0, 0, 0);
+  const hi = Date.UTC(y, mo - 1, d + 2, 0, 0, 0, 0);
+
+  for (let ms = lo; ms <= hi; ms += 60_000) {
+    const got = formatter.formatToParts(new Date(ms));
+    const gv = (type: Intl.DateTimeFormatPartTypes) =>
+      Number(got.find((p) => p.type === type)?.value ?? NaN);
+    if (
+      gv("year") === y &&
+      gv("month") === mo &&
+      gv("day") === d &&
+      gv("hour") === 9 &&
+      gv("minute") === 30
+    ) {
+      return new Date(ms).toISOString();
+    }
+  }
+
+  throw new Error("Could not resolve US market open for date.");
+}
+
+/** `min` / `max` strings for `<input type="date">` (local calendar), spanning the last 10 years through today. */
+export function historicDateInputBounds(): { min: string; max: string } {
+  const max = new Date();
+  max.setHours(12, 0, 0, 0);
+  const min = new Date(max);
+  min.setFullYear(min.getFullYear() - 10);
+  const fmt = (dt: Date) => {
+    const yy = dt.getFullYear();
+    const mm = String(dt.getMonth() + 1).padStart(2, "0");
+    const dd = String(dt.getDate()).padStart(2, "0");
+    return `${yy}-${mm}-${dd}`;
+  };
+  return { min: fmt(min), max: fmt(max) };
+}
+
+/** Local calendar `YYYY-MM-DD` for an ISO timestamp (for `<input type="date">`). */
+export function isoTimestampToLocalDateInput(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const yy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
 export type SimulationTradeType = "buy" | "sell";
 
 export type SimulationPricePoint = {
@@ -205,6 +308,10 @@ export function readStoredTradeMode(): TradeMode {
   return "manual";
 }
 
+/** Minimum span so historic playback can tick for a while without hitting max immediately. */
+const MIN_TIMELINE_SPAN_MS = 6 * 60 * 60 * 1000;
+const MAX_SYNTHETIC_TIMELINE_POINTS = 480;
+
 function buildTimelineFromQuote(quote: MockQuote, now: Date): SimulationPricePoint[] {
   const history = quote.history?.length ? quote.history : [quote.lastPrice];
   const endMs = now.getTime();
@@ -216,6 +323,22 @@ function buildTimelineFromQuote(quote: MockQuote, now: Date): SimulationPricePoi
       time,
       price: Number(history[index]?.toFixed?.(4) ?? history[index]),
     });
+  }
+  if (points.length === 1) {
+    points.unshift({
+      time: new Date(endMs - 60_000).toISOString(),
+      price: points[0].price,
+    });
+  }
+  let spanMs = endMs - new Date(points[0].time).getTime();
+  while (
+    spanMs < MIN_TIMELINE_SPAN_MS &&
+    points.length < MAX_SYNTHETIC_TIMELINE_POINTS
+  ) {
+    const first = points[0];
+    const nextTime = new Date(new Date(first.time).getTime() - 60_000).toISOString();
+    points.unshift({ time: nextTime, price: first.price });
+    spanMs = endMs - new Date(points[0].time).getTime();
   }
   return points;
 }
@@ -391,5 +514,23 @@ export function shiftSimulationTime(
   return {
     ...simulation,
     simulationTime: points[nextIndex].time,
+  };
+}
+
+/** Wall-clock bounds for advancing simulated time (first/last bar in the timeline). */
+export function getSimulationTimelineBounds(
+  simulation: TradingSimulation,
+  selectedSymbol: string,
+): { minMs: number; maxMs: number } | null {
+  const points =
+    simulation.priceTimelineBySymbol[selectedSymbol] ??
+    Object.values(simulation.priceTimelineBySymbol)[0] ??
+    [];
+  if (!points.length) {
+    return null;
+  }
+  return {
+    minMs: new Date(points[0].time).getTime(),
+    maxMs: new Date(points[points.length - 1].time).getTime(),
   };
 }

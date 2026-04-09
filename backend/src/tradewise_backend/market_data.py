@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass
 from importlib import import_module
@@ -47,6 +48,9 @@ DEFAULT_ALPACA_FEED = os.getenv("ML_MARKET_DATA_ALPACA_FEED", "delayed_sip").str
 ALLOWED_MARKET_DATA_PROVIDERS = {"yfinance", "alpaca"}
 YFINANCE_INTRADAY_LOOKBACK_DAYS = 60
 ALPACA_DELAY_MINUTES = 15
+DEFAULT_ALPACA_MIN_REQUEST_INTERVAL_MS = 400
+DEFAULT_ALPACA_MAX_RETRIES = 4
+DEFAULT_ALPACA_RETRY_BASE_SECONDS = 1.0
 DEFAULT_MARKET_DATA_CACHE_SECONDS = 20
 DEFAULT_MARKET_DATA_CACHE_MAX_ENTRIES = 128
 TICKER_ALIASES = {
@@ -77,6 +81,10 @@ def _get_yfinance():
     except ImportError:  # pragma: no cover - exercised only when yfinance is missing
         _YFINANCE = None
     return _YFINANCE
+
+_ALPACA_SHARED_LOCK = Lock()
+_ALPACA_CLIENT_INSTANCE: object | None = None
+_ALPACA_LAST_REQUEST_AT_MONO = 0.0
 
 
 def normalize_ticker(raw_ticker: str) -> str:
@@ -399,19 +407,73 @@ def _resolve_alpaca_end(feed: str, end: str | None) -> datetime:
     return min(parsed_end, delayed_cutoff)
 
 
-def _alpaca_client() -> StockHistoricalDataClient:
+def _alpaca_min_request_interval_seconds() -> float:
+    raw_value = os.getenv(
+        "ML_ALPACA_MIN_REQUEST_INTERVAL_MS",
+        str(DEFAULT_ALPACA_MIN_REQUEST_INTERVAL_MS),
+    ).strip()
+    try:
+        milliseconds = int(raw_value)
+    except ValueError:
+        milliseconds = DEFAULT_ALPACA_MIN_REQUEST_INTERVAL_MS
+    return max(0.0, milliseconds / 1000.0)
+
+
+def _alpaca_max_retries() -> int:
+    raw_value = os.getenv(
+        "ML_ALPACA_MAX_RETRIES",
+        str(DEFAULT_ALPACA_MAX_RETRIES),
+    ).strip()
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return DEFAULT_ALPACA_MAX_RETRIES
+    return max(1, value)
+
+
+def _alpaca_retry_base_seconds() -> float:
+    raw_value = os.getenv(
+        "ML_ALPACA_RETRY_BASE_SECONDS",
+        str(DEFAULT_ALPACA_RETRY_BASE_SECONDS),
+    ).strip()
+    try:
+        return max(0.0, float(raw_value))
+    except ValueError:
+        return DEFAULT_ALPACA_RETRY_BASE_SECONDS
+
+
+def _is_alpaca_rate_limit_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    if "too many requests" in text:
+        return True
+    if "rate limit" in text:
+        return True
+    if "429" in text:
+        return True
+    status = getattr(exc, "status_code", None)
+    if status == 429:
+        return True
+    return False
+
+
+def _alpaca_client_locked() -> StockHistoricalDataClient:
+    """Return a process-wide Alpaca client. Caller must hold ``_ALPACA_SHARED_LOCK``."""
+    global _ALPACA_CLIENT_INSTANCE
+
     if StockHistoricalDataClient is None:
         raise RuntimeError("Install alpaca-py to download Alpaca market data.")
 
-    key_id = os.getenv("ML_MARKET_DATA_ALPACA_KEY_ID") or os.getenv("APCA_API_KEY_ID")
-    secret_key = os.getenv("ML_MARKET_DATA_ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY")
-    if not key_id or not secret_key:
-        raise RuntimeError(
-            "Set ML_MARKET_DATA_ALPACA_KEY_ID and ML_MARKET_DATA_ALPACA_SECRET_KEY "
-            "(or APCA_API_KEY_ID / APCA_API_SECRET_KEY) to use Alpaca market data."
-        )
+    if _ALPACA_CLIENT_INSTANCE is None:
+        key_id = os.getenv("ML_MARKET_DATA_ALPACA_KEY_ID") or os.getenv("APCA_API_KEY_ID")
+        secret_key = os.getenv("ML_MARKET_DATA_ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY")
+        if not key_id or not secret_key:
+            raise RuntimeError(
+                "Set ML_MARKET_DATA_ALPACA_KEY_ID and ML_MARKET_DATA_ALPACA_SECRET_KEY "
+                "(or APCA_API_KEY_ID / APCA_API_SECRET_KEY) to use Alpaca market data."
+            )
+        _ALPACA_CLIENT_INSTANCE = StockHistoricalDataClient(key_id, secret_key)
 
-    return StockHistoricalDataClient(key_id, secret_key)
+    return _ALPACA_CLIENT_INSTANCE  # type: ignore[return-value]
 
 
 def _download_alpaca_price_history(
@@ -431,10 +493,28 @@ def _download_alpaca_price_history(
         feed=_parse_alpaca_feed(feed),
     )
 
-    try:
-        history = _alpaca_client().get_stock_bars(request).df
-    except Exception as exc:  # pragma: no cover - network/provider failure
-        raise RuntimeError(f"Failed to download Alpaca price history for {ticker}: {exc}") from exc
+    global _ALPACA_LAST_REQUEST_AT_MONO
+
+    interval_seconds = _alpaca_min_request_interval_seconds()
+    max_retries = _alpaca_max_retries()
+    base_delay = _alpaca_retry_base_seconds()
+
+    for attempt in range(max_retries):
+        try:
+            with _ALPACA_SHARED_LOCK:
+                if interval_seconds > 0:
+                    wait = interval_seconds - (monotonic() - _ALPACA_LAST_REQUEST_AT_MONO)
+                    if wait > 0:
+                        time.sleep(wait)
+                history = _alpaca_client_locked().get_stock_bars(request).df
+                _ALPACA_LAST_REQUEST_AT_MONO = monotonic()
+            break
+        except Exception as exc:  # pragma: no cover - network/provider failure
+            if not _is_alpaca_rate_limit_error(exc) or attempt >= max_retries - 1:
+                raise RuntimeError(f"Failed to download Alpaca price history for {ticker}: {exc}") from exc
+            sleep_seconds = base_delay * (2**attempt)
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
 
     if isinstance(history.index, pd.MultiIndex) and "symbol" in history.index.names:
         history = history.reset_index(level="symbol", drop=True)
@@ -507,11 +587,22 @@ def get_close_history(
     interval: str = DEFAULT_MARKET_DATA_INTERVAL,
     provider: str | None = None,
     alpaca_feed: str = DEFAULT_ALPACA_FEED,
+    as_of: str | None = None,
 ) -> pd.Series:
+    resolved_start = start
+    resolved_end = end
+    if as_of is not None:
+        parsed = _parse_datetime(as_of)
+        if parsed is None:
+            raise ValueError("Invalid as-of datetime. Use ISO-8601 format.")
+        resolved_end = as_of
+        lookback_days = max(400, length * 4)
+        resolved_start = (parsed - timedelta(days=lookback_days)).isoformat()
+
     history = download_price_history(
         ticker,
-        start=start,
-        end=end,
+        start=resolved_start,
+        end=resolved_end,
         period=period,
         interval=interval,
         provider=provider,
@@ -543,11 +634,22 @@ def get_ohlc_history(
     interval: str = DEFAULT_MARKET_DATA_INTERVAL,
     provider: str | None = None,
     alpaca_feed: str = DEFAULT_ALPACA_FEED,
+    as_of: str | None = None,
 ) -> pd.DataFrame:
+    resolved_start = start
+    resolved_end = end
+    if as_of is not None:
+        parsed = _parse_datetime(as_of)
+        if parsed is None:
+            raise ValueError("Invalid as-of datetime. Use ISO-8601 format.")
+        resolved_end = as_of
+        lookback_days = max(400, length * 4)
+        resolved_start = (parsed - timedelta(days=lookback_days)).isoformat()
+
     history = download_price_history(
         ticker,
-        start=start,
-        end=end,
+        start=resolved_start,
+        end=resolved_end,
         period=period,
         interval=interval,
         provider=provider,

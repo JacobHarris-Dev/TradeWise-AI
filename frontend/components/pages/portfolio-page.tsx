@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -54,6 +54,17 @@ type PortfolioPositionRow = {
 };
 
 export function PortfolioPage() {
+  const {
+    simulationSnapshot,
+    tradingTimeMode,
+    simulatedDate,
+    trackedTickers,
+    paperTradeLog,
+  } = useTradeWorkspace();
+  const simulatedDateRef = useRef(simulatedDate);
+  simulatedDateRef.current = simulatedDate;
+  const useHistoricSim =
+    tradingTimeMode === "historic" && simulationSnapshot != null;
   const { simulation, simulationSnapshot } = useTradeWorkspace();
   const {
     portfolio,
@@ -61,7 +72,6 @@ export function PortfolioPage() {
     portfolioError: error,
     refreshPortfolio,
   } = usePortfolioWorkspace();
-  const { trackedTickers, paperTradeLog } = useTradeWorkspace();
   const [featuredQuotes, setFeaturedQuotes] = useState<MockQuote[]>([]);
   const [featuredLoading, setFeaturedLoading] = useState(true);
 
@@ -192,15 +202,25 @@ export function PortfolioPage() {
     ).slice(0, 3);
   }, [trackedTickers]);
 
+  /** Minute bucket only — historic sim time ticks every second; live mode does not re-fetch this often. */
+  const featuredHistoricMinuteKey =
+    tradingTimeMode === "historic" && simulatedDate
+      ? simulatedDate.slice(0, 16)
+      : null;
+
   useEffect(() => {
     let cancelled = false;
 
     async function loadFeaturedQuotes() {
       try {
         setFeaturedLoading(true);
+        const latestSim = simulatedDateRef.current;
+        const asOf =
+          tradingTimeMode === "historic" && latestSim ? latestSim : undefined;
         const batch = await fetchStockQuotes(featuredSymbols, {
           includeChart: false,
           provider: "yfinance",
+          ...(asOf ? { asOf } : {}),
         });
         if (!cancelled) {
           setFeaturedQuotes(batch.results);
@@ -221,6 +241,18 @@ export function PortfolioPage() {
     return () => {
       cancelled = true;
     };
+  }, [featuredSymbols, featuredHistoricMinuteKey, tradingTimeMode]);
+
+  const totalEquity = useHistoricSim
+    ? simulationSnapshot.portfolioValue
+    : portfolio?.totalEquity ?? portfolio?.cash ?? 0;
+  const baselineEquity = useHistoricSim
+    ? 10_000
+    : portfolio?.baselineEquity ?? portfolio?.startingCash ?? 10000;
+  const totalReturn = totalEquity - baselineEquity;
+  const totalReturnPercent =
+    baselineEquity > 0 ? (totalReturn / baselineEquity) * 100 : 0;
+  const isPositive = totalReturn >= 0;
   }, [featuredSymbols]);
 
   return (
@@ -251,7 +283,8 @@ export function PortfolioPage() {
                 <ArrowDownRight className="mr-1 h-4 w-4" />
               )}
               ${formatMoney(Math.abs(totalReturn))} (
-              {Math.abs(totalReturnPercent).toFixed(2)}%) All Time
+              {Math.abs(totalReturnPercent).toFixed(2)}%){" "}
+              {useHistoricSim ? "vs session start" : "All Time"}
             </div>
           </div>
 
@@ -260,6 +293,7 @@ export function PortfolioPage() {
               <Wallet className="mr-2 h-4 w-4 text-indigo-400" /> Purchasing Power
             </h3>
             <div className="font-mono text-3xl font-bold text-slate-200">
+              ${formatMoney(useHistoricSim ? simulationSnapshot.cash : portfolio?.cash ?? 0)}
               ${formatMoney(cashValue)}
             </div>
           </div>
@@ -269,6 +303,11 @@ export function PortfolioPage() {
               <PieChart className="mr-2 h-4 w-4 text-indigo-400" /> Invested Capital
             </h3>
             <div className="font-mono text-3xl font-bold text-slate-200">
+              ${formatMoney(
+                useHistoricSim
+                  ? simulationSnapshot.portfolioValue - simulationSnapshot.cash
+                  : portfolio?.positionsValue ?? 0,
+              )}
               ${formatMoney(positionsValue)}
             </div>
           </div>
@@ -362,12 +401,16 @@ export function PortfolioPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           <PortfolioGrowthChart
-            totalValue={portfolio?.totalEquity ?? portfolio?.cash ?? 0}
+            totalValue={
+              useHistoricSim
+                ? simulationSnapshot.portfolioValue
+                : portfolio?.totalEquity ?? portfolio?.cash ?? 0
+            }
             title="Total paper account value"
-            points={portfolio?.points}
-            dayChange={portfolio?.dayChange}
-            dayChangePercent={portfolio?.dayChangePercent}
-            updatedAt={portfolio?.updatedAt}
+            points={useHistoricSim ? undefined : portfolio?.points}
+            dayChange={useHistoricSim ? undefined : portfolio?.dayChange}
+            dayChangePercent={useHistoricSim ? undefined : portfolio?.dayChangePercent}
+            updatedAt={useHistoricSim ? simulationSnapshot.time : portfolio?.updatedAt}
           />
 
           <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-sm">
@@ -433,7 +476,21 @@ export function PortfolioPage() {
                   <tbody className="divide-y divide-slate-800/50">
                     {positionRows.map((position) => {
                       const currentValue = position.marketValue;
-                      const costBasis = position.avgEntryPrice * position.shares;
+                      const avgEntryPrice =
+                        "avgEntryPrice" in position &&
+                        typeof position.avgEntryPrice === "number"
+                          ? position.avgEntryPrice
+                          : position.shares > 0
+                            ? currentValue / position.shares
+                            : 0;
+                      const currentPrice =
+                        "currentPrice" in position &&
+                        typeof position.currentPrice === "number"
+                          ? position.currentPrice
+                          : position.shares > 0
+                            ? currentValue / position.shares
+                            : 0;
+                      const costBasis = avgEntryPrice * position.shares;
                       const unrealized = currentValue - costBasis;
                       const pnlPercent =
                         costBasis > 0 ? (unrealized / costBasis) * 100 : 0;
@@ -460,10 +517,10 @@ export function PortfolioPage() {
                             {position.shares}
                           </td>
                           <td className="px-6 py-4 text-right font-mono text-slate-300">
-                            ${position.avgEntryPrice.toFixed(2)}
+                            ${avgEntryPrice.toFixed(2)}
                           </td>
                           <td className="px-6 py-4 text-right font-mono text-slate-300">
-                            ${position.currentPrice.toFixed(2)}
+                            ${currentPrice.toFixed(2)}
                           </td>
                           <td className="px-6 py-4 text-right font-mono font-bold text-white">
                             ${currentValue.toFixed(2)}

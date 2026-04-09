@@ -115,6 +115,8 @@ class MarketNewsSnapshot:
 
 _NEWS_CONTEXT_CACHE: dict[str, _CachedNewsContext] = {}
 _NEWS_CONTEXT_CACHE_LOCK = Lock()
+_NEWS_HISTORIC_CONTEXT_CACHE: dict[str, _CachedNewsContext] = {}
+_NEWS_HISTORIC_CONTEXT_CACHE_LOCK = Lock()
 _MARKET_NEWS_CACHE: dict[str, MarketNewsSnapshot] = {}
 _MARKET_NEWS_CACHE_LOCK = Lock()
 _YFINANCE = None
@@ -140,6 +142,16 @@ def _configured_news_refresh_seconds() -> int:
         value = int(raw_value)
     except ValueError:
         return DEFAULT_NEWS_REFRESH_SECONDS
+    return max(0, value)
+
+
+def _configured_historic_news_cache_seconds() -> int:
+    """Long TTL for as-of news: same (ticker, UTC day) reuses one upstream fetch."""
+    raw_value = os.getenv("ML_NEWS_HISTORIC_CACHE_SECONDS", "3600").strip()
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return 3600
     return max(0, value)
 
 
@@ -373,6 +385,63 @@ def build_news_context_snapshot(
         fetched_at=fetched_at,
         from_cache=False,
         refresh_seconds=resolved_refresh_seconds,
+    )
+
+
+def build_news_context_snapshot_for_as_of(
+    ticker: str,
+    as_of: str,
+    *,
+    force_refresh: bool = False,
+) -> NewsContextSnapshot:
+    """
+    News context for a simulated/historic instant: filter provider articles to a window
+    ending on as_of's UTC calendar date. Cached per (ticker, date) to limit API churn.
+    """
+    normalized_ticker = validate_ticker(normalize_ticker(ticker))
+    parsed = _coerce_datetime(as_of)
+    if parsed is None:
+        raise ValueError("Invalid asOf datetime. Use ISO-8601 format.")
+    as_of_date = parsed.astimezone(UTC).date()
+    cache_key = f"{normalized_ticker}|{as_of_date.isoformat()}"
+    cache_ttl = _configured_historic_news_cache_seconds()
+    now = datetime.now(tz=UTC)
+
+    with _NEWS_HISTORIC_CONTEXT_CACHE_LOCK:
+        cached = _NEWS_HISTORIC_CONTEXT_CACHE.get(cache_key)
+        if (
+            not force_refresh
+            and cached is not None
+            and cache_ttl > 0
+            and (now - cached.fetched_at).total_seconds() < cache_ttl
+        ):
+            return NewsContextSnapshot(
+                context=cached.context,
+                fetched_at=cached.fetched_at,
+                from_cache=True,
+                refresh_seconds=cache_ttl,
+            )
+
+    articles = fetch_recent_news(normalized_ticker, limit=50)
+    context = build_news_context_for_date(
+        normalized_ticker,
+        as_of_date,
+        articles=articles,
+        lookback_days=7,
+    )
+    fetched_at = datetime.now(tz=UTC)
+
+    with _NEWS_HISTORIC_CONTEXT_CACHE_LOCK:
+        _NEWS_HISTORIC_CONTEXT_CACHE[cache_key] = _CachedNewsContext(
+            context=context,
+            fetched_at=fetched_at,
+        )
+
+    return NewsContextSnapshot(
+        context=context,
+        fetched_at=fetched_at,
+        from_cache=False,
+        refresh_seconds=cache_ttl,
     )
 
 
