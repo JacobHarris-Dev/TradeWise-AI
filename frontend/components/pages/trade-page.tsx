@@ -9,7 +9,7 @@ import { useTradeWorkspace } from "@/components/providers/trade-workspace-provid
 import { LiveLineChart } from "@/components/stock/live-line-chart";
 import { StockCard } from "@/components/stock/stock-card";
 import { TradeTickerNewsReport } from "@/components/trade/trade-market-news";
-import type { ModelProfile, RefreshCadence } from "@/lib/mocks/stock-data";
+import type { ModelProfile, RefreshCadence, TradeSignal } from "@/lib/mocks/stock-data";
 import { MAX_TRACKED_TICKERS, type TradeMode } from "@/lib/trade-workspace";
 
 const SIGNAL_BADGES = {
@@ -61,6 +61,111 @@ type TradeUiMode = "simple" | "advanced";
 function InfoHint({ label: _label }: { label: string }) {
   void _label;
   return null;
+}
+
+function confidenceDescriptor(confidence: number) {
+  if (confidence >= 80) {
+    return "High conviction";
+  }
+  if (confidence >= 65) {
+    return "Moderate conviction";
+  }
+  if (confidence >= 50) {
+    return "Building confidence";
+  }
+  return "Low conviction";
+}
+
+function confidenceTone(signal: TradeSignal) {
+  if (signal === "bullish") {
+    return {
+      text: "text-emerald-300",
+      ring: "rgba(16,185,129,0.95)",
+      track: "rgba(15,23,42,0.9)",
+      bar: "from-emerald-500 via-emerald-400 to-lime-300",
+      panel: "border-emerald-500/20 bg-emerald-500/10",
+    };
+  }
+  if (signal === "bearish") {
+    return {
+      text: "text-rose-300",
+      ring: "rgba(244,63,94,0.95)",
+      track: "rgba(15,23,42,0.9)",
+      bar: "from-rose-500 via-rose-400 to-orange-300",
+      panel: "border-rose-500/20 bg-rose-500/10",
+    };
+  }
+  return {
+    text: "text-sky-300",
+    ring: "rgba(56,189,248,0.95)",
+    track: "rgba(15,23,42,0.9)",
+    bar: "from-sky-500 via-cyan-400 to-slate-300",
+    panel: "border-sky-500/20 bg-sky-500/10",
+  };
+}
+
+function ConfidenceMeter({
+  confidence,
+  signal,
+}: {
+  confidence: number;
+  signal: TradeSignal;
+}) {
+  const value = Math.max(0, Math.min(confidence, 100));
+  const tone = confidenceTone(signal);
+  const descriptor = confidenceDescriptor(value);
+  const arcDegrees = Math.max(12, Math.round((value / 100) * 360));
+
+  return (
+    <section
+      className={`mt-4 rounded-2xl border p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] ${tone.panel}`}
+    >
+      <div className="grid gap-4 md:grid-cols-[9rem_minmax(0,1fr)] md:items-center">
+        <div className="mx-auto">
+          <div
+            className="flex h-36 w-36 items-center justify-center rounded-full p-3"
+            style={{
+              background: `conic-gradient(${tone.ring} 0deg ${arcDegrees}deg, ${tone.track} ${arcDegrees}deg 360deg)`,
+            }}
+          >
+            <div className="flex h-full w-full flex-col items-center justify-center rounded-full bg-slate-950 ring-1 ring-slate-800">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Confidence
+              </span>
+              <span className={`mt-1 text-3xl font-semibold ${tone.text}`}>
+                {value.toFixed(0)}%
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+            Signal strength
+          </p>
+          <p className={`mt-1 text-lg font-semibold ${tone.text}`}>
+            {descriptor}
+          </p>
+          <p className="mt-1 text-sm leading-6 text-slate-300">
+            Higher confidence means TradeWise sees a cleaner setup in the current data. It is still a probability read, not a guarantee.
+          </p>
+
+          <div className="mt-4">
+            <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <span>Cautious</span>
+              <span>Strong</span>
+            </div>
+            <div className="mt-2 h-3 overflow-hidden rounded-full bg-slate-950 ring-1 ring-inset ring-slate-800">
+              <div
+                className={`h-full rounded-full bg-gradient-to-r ${tone.bar}`}
+                style={{ width: `${value}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 /**
@@ -687,16 +792,12 @@ export function TradePage() {
                 </div>
 
                 {isAdvancedView ? (
-                  <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
-                    <div>
-                      <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500">
-                        How sure it is
-                        <InfoHint label="This is the model's confidence level. Higher means it sees a clearer pattern, not that the outcome is guaranteed." />
-                      </dt>
-                      <dd className="mt-1 font-semibold text-white">
-                        {quote.confidence?.toFixed(1) ?? "-"}%
-                      </dd>
-                    </div>
+                  <>
+                    <ConfidenceMeter
+                      confidence={quote.confidence ?? 0}
+                      signal={quote.signal}
+                    />
+                    <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-2">
                     <div>
                       <dt className="flex items-center gap-1 text-xs uppercase tracking-wide text-slate-500">
                         Risk style
@@ -734,11 +835,18 @@ export function TradePage() {
                         {lastTickAt ? new Date(lastTickAt).toLocaleTimeString() : "-"}
                       </dd>
                     </div>
-                  </dl>
+                    </dl>
+                  </>
                 ) : (
-                  <p className="mt-3 text-sm leading-6 text-slate-300">
-                    Quick take: TradeWise currently leans {SIGNAL_LABELS[quote.signal].toLowerCase()} on {quote.ticker}. Switch to Advanced view for confidence and timing metrics.
-                  </p>
+                  <>
+                    <ConfidenceMeter
+                      confidence={quote.confidence ?? 0}
+                      signal={quote.signal}
+                    />
+                    <p className="mt-3 text-sm leading-6 text-slate-300">
+                      Quick take: TradeWise currently leans {SIGNAL_LABELS[quote.signal].toLowerCase()} on {quote.ticker}. Switch to Advanced view for more timing and market context.
+                    </p>
+                  </>
                 )}
 
                 <TradeTickerNewsReport

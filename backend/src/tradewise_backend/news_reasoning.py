@@ -150,6 +150,10 @@ def _remote_llm_enabled() -> bool:
     return bool(_remote_llm_base_url())
 
 
+def _should_skip_local_qwen() -> bool:
+    return _remote_llm_enabled()
+
+
 def _openai_chat_completion(
     *,
     prompt: str,
@@ -303,6 +307,39 @@ def _qwen_reasoning(
     topics: list[str],
     headlines: list[str],
 ) -> ReasoningResult:
+    headline_block = "\n".join([f"- {headline}" for headline in headlines[:3]]) or "- No headline available"
+    topic_text = ", ".join(topics[:3]) if topics else "none"
+    sentiment_text = sentiment or "neutral"
+
+    prompt = (
+        "You are a finance tutor for college students. "
+        "Explain what today's headlines may mean in plain language with no jargon. "
+        "Keep it short: 4-6 sentences, direct and practical.\n\n"
+        f"Ticker: {ticker}\n"
+        f"Model signal: {signal}\n"
+        f"Model confidence: {confidence:.1f}%\n"
+        f"News sentiment: {sentiment_text}\n"
+        f"Topics: {topic_text}\n"
+        "Headlines:\n"
+        f"{headline_block}\n\n"
+        "Student-friendly reasoning:"
+    )
+
+    if _remote_llm_enabled():
+        try:
+            reply = _openai_chat_completion(
+                prompt=prompt,
+                system_prompt="You are a finance tutor for college students.",
+                max_new_tokens=180,
+            )
+            if reply:
+                return ReasoningResult(text=reply, source="remote-llm")
+        except Exception:
+            return ReasoningResult(
+                text=_template_reasoning(ticker, signal, confidence, sentiment, topics, headlines),
+                source="template",
+            )
+
     if not _qwen_runtime_supported():
         return ReasoningResult(
             text=_template_reasoning(ticker, signal, confidence, sentiment, topics, headlines),
@@ -321,24 +358,6 @@ def _qwen_reasoning(
 
     try:
         tokenizer, model = _load_qwen()
-
-        headline_block = "\n".join([f"- {headline}" for headline in headlines[:3]]) or "- No headline available"
-        topic_text = ", ".join(topics[:3]) if topics else "none"
-        sentiment_text = sentiment or "neutral"
-
-        prompt = (
-            "You are a finance tutor for college students. "
-            "Explain what today's headlines may mean in plain language with no jargon. "
-            "Keep it short: 4-6 sentences, direct and practical.\n\n"
-            f"Ticker: {ticker}\n"
-            f"Model signal: {signal}\n"
-            f"Model confidence: {confidence:.1f}%\n"
-            f"News sentiment: {sentiment_text}\n"
-            f"Topics: {topic_text}\n"
-            "Headlines:\n"
-            f"{headline_block}\n\n"
-            "Student-friendly reasoning:"
-        )
 
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
         with torch.no_grad() if torch is not None else nullcontext():
@@ -380,6 +399,11 @@ def build_student_news_reasoning(
         cached = _cached_reasoning(key, ttl)
         if cached is not None:
             return cached
+
+    if _remote_llm_enabled():
+        reasoning = _qwen_reasoning(ticker, signal, confidence, sentiment, topics, headlines)
+        _store_cached_reasoning(key, reasoning.text, reasoning.source)
+        return reasoning
 
     if not _use_qwen_enabled():
         text = _template_reasoning(ticker, signal, confidence, sentiment, topics, headlines)
@@ -457,9 +481,17 @@ def build_investment_chat_reply(
             if reply:
                 return ReasoningResult(text=reply, source="remote-llm")
         except Exception:
-            pass
+            return ReasoningResult(
+                text=(
+                    f"I mapped your goal to a {model_profile} profile and selected {selected_text}. "
+                    f"{rationale_text} While staying focused on {sector_text}."
+                ),
+                source="template",
+            )
 
     if (
+        _should_skip_local_qwen()
+        or
         not _use_qwen_enabled()
         or not _qwen_runtime_supported()
         or not _qwen_can_run_chat_in_current_env()
