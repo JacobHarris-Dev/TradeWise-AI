@@ -6,11 +6,13 @@
     "dev:all": "node scripts/dev.mjs",
     "dev:frontend": "npm --prefix frontend run dev",
     "dev:backend": "node scripts/dev-backend.mjs",
+    "clean:frontend": "node scripts/clean-frontend-build.mjs",
     "build": "npm run build:all",
     "build:all": "npm run build:frontend && npm run build:backend",
     "build:frontend": "npm --prefix frontend run build",
     "build:backend": "node scripts/build-backend.mjs",
-    "prod": "npm run build:all && npm run start:prod",
+    "prod": "npm run clean:frontend && npm run build:all && npm run start:prod",
+    "prod:clean": "npm run clean:frontend && npm run prod",
     "start:prod": "node scripts/start.mjs",
     "lint": "npm --prefix frontend run lint"
   }

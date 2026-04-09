@@ -1588,6 +1588,38 @@ export function TradeWorkspaceProvider({
   }, [trackedTickers.length, tradingTimeMode]);
 
   useEffect(() => {
+    if (tradingTimeMode !== "live" || !trackedTickersKey) {
+      return;
+    }
+
+    const symbols = trackedTickersKey.split(",").filter(Boolean);
+    if (!symbols.length) {
+      return;
+    }
+
+    const hasMissingQuote = symbols.some((ticker) => !quotesByTicker[ticker]);
+    const intervalMs = hasMissingQuote ? 10_000 : CADENCE_MS[refreshCadence];
+
+    const pollQuotes = () => {
+      void loadTrackedQuotes(symbols, { showLoading: false });
+    };
+
+    // Fast recovery path: if one or more tracked symbols are missing, immediately retry.
+    if (hasMissingQuote) {
+      pollQuotes();
+    }
+
+    const timer = window.setInterval(pollQuotes, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [
+    loadTrackedQuotes,
+    quotesByTicker,
+    refreshCadence,
+    trackedTickersKey,
+    tradingTimeMode,
+  ]);
+
+  useEffect(() => {
     if (tradingTimeMode !== "live" || !trackedTickers.length) {
       return;
     }

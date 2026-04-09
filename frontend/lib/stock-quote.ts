@@ -17,6 +17,34 @@ import type {
   WatchSession,
 } from "@/lib/mocks/stock-data";
 
+type ReusableResponseCacheEntry = {
+  payload: unknown;
+  expiresAt: number;
+};
+
+const inFlightRequestCache = new Map<string, Promise<unknown>>();
+const reusableResponseCache = new Map<string, ReusableResponseCacheEntry>();
+
+function cleanupReusableResponseCache(nowMs: number) {
+  for (const [key, entry] of reusableResponseCache.entries()) {
+    if (entry.expiresAt <= nowMs) {
+      reusableResponseCache.delete(key);
+    }
+  }
+}
+
+function buildRequestCacheKey(input: RequestInfo | URL, init?: RequestInit) {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const url = typeof input === "string" ? input : input.toString();
+  const body =
+    typeof init?.body === "string"
+      ? init.body
+      : init?.body == null
+        ? ""
+        : "[non-string-body]";
+  return `${method} ${url} ${body}`;
+}
+
 async function fetchWithNetworkGuard(
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -30,6 +58,52 @@ async function fetchWithNetworkGuard(
       );
     }
     throw e;
+  }
+}
+
+async function requestJsonWithCoalescing<T>(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  options: { reuseWindowMs?: number } = {},
+): Promise<T> {
+  const requestKey = buildRequestCacheKey(input, init);
+  const nowMs = Date.now();
+  cleanupReusableResponseCache(nowMs);
+
+  const reuseWindowMs = Math.max(0, options.reuseWindowMs ?? 0);
+  if (reuseWindowMs > 0) {
+    const cached = reusableResponseCache.get(requestKey);
+    if (cached && cached.expiresAt > nowMs) {
+      return cached.payload as T;
+    }
+  }
+
+  const inFlight = inFlightRequestCache.get(requestKey);
+  if (inFlight) {
+    return (await inFlight) as T;
+  }
+
+  const requestPromise = (async () => {
+    const response = await fetchWithNetworkGuard(input, init);
+    if (!response.ok) {
+      const message = await readErrorMessage(response);
+      throw new Error(message || "Request failed.");
+    }
+    const payload = (await response.json()) as T;
+    if (reuseWindowMs > 0) {
+      reusableResponseCache.set(requestKey, {
+        payload,
+        expiresAt: Date.now() + reuseWindowMs,
+      });
+    }
+    return payload;
+  })();
+
+  inFlightRequestCache.set(requestKey, requestPromise as Promise<unknown>);
+  try {
+    return await requestPromise;
+  } finally {
+    inFlightRequestCache.delete(requestKey);
   }
 }
 
@@ -62,17 +136,11 @@ export async function fetchStockQuote(
     params.set("asOf", options.asOf);
   }
 
-  const response = await fetchWithNetworkGuard(
+  return requestJsonWithCoalescing<MockQuote>(
     `/api/ml/quote?${params.toString()}`,
     { cache: "no-store" },
+    { reuseWindowMs: 1_000 },
   );
-
-  if (!response.ok) {
-    const message = await readErrorMessage(response);
-    throw new Error(message || "Could not load quote.");
-  }
-
-  return (await response.json()) as MockQuote;
 }
 
 export async function fetchStockQuotes(
@@ -112,20 +180,15 @@ export async function fetchStockQuotes(
     params.set("asOf", options.asOf);
   }
 
-  const response = await fetchWithNetworkGuard(
-    `/api/ml/quotes?${params.toString()}`,
-    { cache: "no-store" },
-  );
-
-  if (!response.ok) {
-    const message = await readErrorMessage(response);
-    throw new Error(message || "Could not load quotes.");
-  }
-
-  return (await response.json()) as {
+  return requestJsonWithCoalescing<{
     results: MockQuote[];
     errors: Array<{ ticker: string; message: string }>;
-  };
+  }>(
+    `/api/ml/quotes?${params.toString()}`,
+    { cache: "no-store" },
+    // Quote requests are the hottest startup path; short response reuse smooths bursty mounts.
+    { reuseWindowMs: 2_000 },
+  );
 }
 
 export async function fetchStockRecommendations(
@@ -351,16 +414,11 @@ export async function fetchWatchSession(userId?: string): Promise<WatchSession> 
   }
   const query = params.toString();
   const url = query ? `/api/ml/watch?${query}` : "/api/ml/watch";
-  const response = await fetch(url, {
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const message = await readErrorMessage(response);
-    throw new Error(message || "Could not load watch session.");
-  }
-
-  return (await response.json()) as WatchSession;
+  return requestJsonWithCoalescing<WatchSession>(
+    url,
+    { cache: "no-store" },
+    { reuseWindowMs: 2_000 },
+  );
 }
 
 export async function fetchPaperAccount(userId?: string): Promise<PaperAccount> {
@@ -371,16 +429,11 @@ export async function fetchPaperAccount(userId?: string): Promise<PaperAccount> 
   const query = params.toString();
   const url = query ? `/api/ml/paper-account?${query}` : "/api/ml/paper-account";
 
-  const response = await fetch(url, {
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const message = await readErrorMessage(response);
-    throw new Error(message || "Could not load paper account.");
-  }
-
-  return (await response.json()) as PaperAccount;
+  return requestJsonWithCoalescing<PaperAccount>(
+    url,
+    { cache: "no-store" },
+    { reuseWindowMs: 2_000 },
+  );
 }
 
 export async function fetchPaperAccountPerformance(
@@ -405,16 +458,11 @@ export async function fetchPaperAccountPerformance(
     ? `/api/ml/paper-account/performance?${query}`
     : "/api/ml/paper-account/performance";
 
-  const response = await fetch(url, {
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const message = await readErrorMessage(response);
-    throw new Error(message || "Could not load paper account performance.");
-  }
-
-  return (await response.json()) as PaperAccountPerformance;
+  return requestJsonWithCoalescing<PaperAccountPerformance>(
+    url,
+    { cache: "no-store" },
+    { reuseWindowMs: 2_000 },
+  );
 }
 
 export async function fetchNewsReport(
@@ -446,16 +494,11 @@ export async function fetchNewsReport(
     params.set("asOf", options.asOf);
   }
 
-  const response = await fetch(`/api/ml/news-report?${params.toString()}`, {
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const message = await readErrorMessage(response);
-    throw new Error(message || "Could not load news report.");
-  }
-
-  return (await response.json()) as NewsReport;
+  return requestJsonWithCoalescing<NewsReport>(
+    `/api/ml/news-report?${params.toString()}`,
+    { cache: "no-store" },
+    { reuseWindowMs: 2_000 },
+  );
 }
 
 export async function fetchMarketNews(options: {
@@ -482,16 +525,11 @@ export async function fetchMarketNews(options: {
 
   const query = params.toString();
   const url = query ? `/api/ml/market-news?${query}` : "/api/ml/market-news";
-  const response = await fetch(url, {
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const message = await readErrorMessage(response);
-    throw new Error(message || "Could not load market news.");
-  }
-
-  return (await response.json()) as MarketNews;
+  return requestJsonWithCoalescing<MarketNews>(
+    url,
+    { cache: "no-store" },
+    { reuseWindowMs: 2_000 },
+  );
 }
 
 export async function fetchInvestmentChatResponse(payload: {
