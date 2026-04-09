@@ -5,7 +5,21 @@ TradeWise is split into two parts:
 - `frontend/`: Next.js app, Firebase auth, dashboard, trade UI, and the same-origin ML proxy routes.
 - `backend/`: Python FastAPI ML service powered by `numpy`, `pandas`, `matplotlib`, and `QuantLib`.
 
-## Run It
+## Setup & Run It
+
+First, set up your environment variables based on the provided examples:
+
+```bash
+# Set up frontend environment (Firebase config)
+cp frontend/.env.example frontend/.env.local
+
+# Set up backend environment (API keys & settings)
+cp backend/.env.example backend/.env
+```
+
+*Note: If you just created or modified these `.env` files while the server was running, you must restart it to pick up the changes.*
+
+Then, start both services together:
 
 ```bash
 npm run dev
@@ -37,7 +51,7 @@ ML_BACKEND_URL=http://192.168.1.50:8000
 # backend/.env
 ML_QWEN_REMOTE_BASE_URL=http://192.168.1.77:8001
 ML_QWEN_REMOTE_API_KEY=your-key-if-needed
-ML_QWEN_REMOTE_MODEL=Qwen/Qwen2.5-0.5B-Instruct
+ML_QWEN_REMOTE_MODEL=qwen2.5:7b
 ```
 
 The backend will use the remote desktop model for chat when `ML_QWEN_REMOTE_BASE_URL`
@@ -128,7 +142,7 @@ That flag works best after installing the optional transfer helper:
 python -m pip install hf_transfer
 ```
 
-The default model is `Qwen/Qwen2.5-0.5B-Instruct`.
+The default remote desktop model in the current setup is `qwen2.5:7b`.
 
 Helpful options:
 

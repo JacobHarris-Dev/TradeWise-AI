@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, time, timedelta
+from functools import lru_cache
+from importlib import import_module
 from pathlib import Path
-
-import pandas as pd
 
 from .features import DEFAULT_ANNUAL_RATE, DISCOUNT_DAYS, discount_factor
 from .model_runtime import load_model_bundle, normalize_model_profile, predict_signal
@@ -26,6 +26,10 @@ DATASET_REQUIRED_COLUMNS = {
 }
 
 
+def _pd():
+    return import_module("pandas")
+
+
 def get_mock_trading_dataset_path() -> Path:
     configured = os.getenv("ML_TRAINING_DATASET_CSV")
     if configured:
@@ -34,6 +38,15 @@ def get_mock_trading_dataset_path() -> Path:
             return path
         return Path(__file__).resolve().parents[3] / path
     return Path(__file__).resolve().parents[3] / "tradewise_training_dataset.csv"
+
+
+@lru_cache(maxsize=4)
+def _load_mock_trading_dataset(
+    dataset_path: str,
+    mtime_ns: int,
+):
+    del mtime_ns
+    return _pd().read_csv(dataset_path)
 
 
 def build_mock_trading_day_response(
@@ -54,7 +67,11 @@ def build_mock_trading_day_response(
     if not dataset_path.exists():
         raise RuntimeError(f"Mock trading dataset not found at {dataset_path}.")
 
-    dataset = pd.read_csv(dataset_path)
+    pd = _pd()
+    dataset = _load_mock_trading_dataset(
+        str(dataset_path.resolve()),
+        dataset_path.stat().st_mtime_ns,
+    )
     missing_columns = sorted(DATASET_REQUIRED_COLUMNS - set(dataset.columns))
     if missing_columns:
         raise RuntimeError(

@@ -2,13 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from importlib import import_module
 import os
 from threading import Lock
-
-try:
-    import yfinance as yf
-except ImportError:  # pragma: no cover - exercised only when yfinance is missing
-    yf = None
 
 from .market_data import normalize_ticker, validate_ticker
 from .schemas import NewsSentiment
@@ -123,6 +119,21 @@ _NEWS_HISTORIC_CONTEXT_CACHE: dict[str, _CachedNewsContext] = {}
 _NEWS_HISTORIC_CONTEXT_CACHE_LOCK = Lock()
 _MARKET_NEWS_CACHE: dict[str, MarketNewsSnapshot] = {}
 _MARKET_NEWS_CACHE_LOCK = Lock()
+_YFINANCE = None
+_YFINANCE_IMPORT_ATTEMPTED = False
+
+
+def _get_yfinance():
+    global _YFINANCE, _YFINANCE_IMPORT_ATTEMPTED
+    if _YFINANCE_IMPORT_ATTEMPTED:
+        return _YFINANCE
+
+    _YFINANCE_IMPORT_ATTEMPTED = True
+    try:
+        _YFINANCE = import_module("yfinance")
+    except ImportError:  # pragma: no cover - exercised only when yfinance is missing
+        _YFINANCE = None
+    return _YFINANCE
 
 
 def _configured_news_refresh_seconds() -> int:
@@ -203,6 +214,7 @@ def _extract_raw_content(item: dict[str, object]) -> dict[str, object]:
 
 
 def fetch_recent_news(ticker: str, limit: int = 8) -> list[NewsArticle]:
+    yf = _get_yfinance()
     if yf is None:
         return []
 
