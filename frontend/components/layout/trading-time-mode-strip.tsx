@@ -1,9 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 import {
-  ChevronRight,
   History,
   Pause,
   Play,
@@ -20,6 +18,8 @@ import {
 
 const HISTORIC_SPEED_MIN = 0.05;
 const HISTORIC_SPEED_MAX = 100;
+
+type StripVariant = "sidebar" | "strip";
 
 function formatSpeedDraft(value: number) {
   if (!Number.isFinite(value)) return "1";
@@ -65,17 +65,8 @@ function TradingTimeModeModal({
   const dateBounds = historicDateInputBounds();
   const [draftMode, setDraftMode] = useState<TradingTimeMode>(currentMode);
   const [draftHistoricDate, setDraftHistoricDate] = useState(
-    () =>
-      isoTimestampToLocalDateInput(startDate) || dateBounds.max,
+    () => isoTimestampToLocalDateInput(startDate) || dateBounds.max,
   );
-
-  useEffect(() => {
-    if (!open) return;
-    setDraftMode(currentMode);
-    setDraftHistoricDate(
-      isoTimestampToLocalDateInput(startDate) || dateBounds.max,
-    );
-  }, [open, currentMode, startDate, dateBounds.max]);
 
   useEffect(() => {
     if (!open) return;
@@ -111,8 +102,8 @@ function TradingTimeModeModal({
               Session mode
             </p>
             <p className="mt-1 text-sm text-slate-400">
-              Choose how market data and time advance. Historic uses a separate paper
-              portfolio from live.
+              Choose how market data and time advance. Practice mode uses a
+              separate paper portfolio from live.
             </p>
           </div>
           <button
@@ -138,7 +129,8 @@ function TradingTimeModeModal({
             <Radio className="h-8 w-8 text-emerald-400" />
             <span className="mt-3 text-sm font-semibold text-white">Live</span>
             <span className="mt-1 text-xs leading-relaxed text-slate-400">
-              Real-time quotes, streaming context, and your live paper portfolio.
+              Real-time quotes, streaming context, and your live paper
+              portfolio.
             </span>
           </button>
 
@@ -152,9 +144,11 @@ function TradingTimeModeModal({
             }`}
           >
             <History className="h-8 w-8 text-amber-400" />
-            <span className="mt-3 text-sm font-semibold text-white">Historic</span>
+            <span className="mt-3 text-sm font-semibold text-white">
+              Practice
+            </span>
             <span className="mt-1 text-xs leading-relaxed text-slate-400">
-              Simulated clock, prices and news pinned to simulated time. Separate
+              Simulated clock, prices and news pinned to replay time. Separate
               holdings from live.
             </span>
           </button>
@@ -169,9 +163,8 @@ function TradingTimeModeModal({
               Start session on
             </label>
             <p className="mt-1 text-xs text-slate-500">
-              Pick any NYSE session day (last 10 years). Playback starts at 9:30 AM US Eastern
-              on that date. Simulated time can run forward without stopping at chart end or
-              today&apos;s date; prices use the last known bar when ahead of loaded history.
+              Pick any NYSE session day from the last 10 years. Playback starts
+              at 9:30 AM US Eastern on that date.
             </p>
             <input
               id="historic-session-date"
@@ -209,20 +202,81 @@ function TradingTimeModeModal({
             Apply
           </button>
         </div>
-
-        <p className="mt-4 text-center text-xs text-slate-500">
-          Shown on every page — adjust session mode or historic date anytime.
-        </p>
       </div>
     </div>
   );
 }
 
-/**
- * Sticky bar below the app header: live vs historic indicator, session modal, and
- * historic playback controls (time, play/pause, speed).
- */
-export function TradingTimeModeStrip() {
+function SpeedControl({
+  inputId,
+  speedInputValue,
+  speedMultiplier,
+  speedDraft,
+  speedInputFocused,
+  setSpeedDraft,
+  setSpeedInputFocused,
+  commitSpeedDraft,
+  compact = false,
+}: {
+  inputId: string;
+  speedInputValue: string;
+  speedMultiplier: number;
+  speedDraft: string;
+  speedInputFocused: boolean;
+  setSpeedDraft: (value: string) => void;
+  setSpeedInputFocused: (value: boolean) => void;
+  commitSpeedDraft: () => void;
+  compact?: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <label
+        htmlFor={inputId}
+        className={`text-[10px] font-semibold uppercase tracking-wider ${
+          compact ? "text-amber-100/70" : "text-slate-500"
+        }`}
+      >
+        Speed
+      </label>
+      <input
+        id={inputId}
+        type="text"
+        inputMode="decimal"
+        autoComplete="off"
+        value={speedInputFocused ? speedDraft : speedInputValue}
+        onChange={(e) => setSpeedDraft(e.target.value)}
+        onFocus={() => {
+          setSpeedDraft(formatSpeedDraft(speedMultiplier));
+          setSpeedInputFocused(true);
+        }}
+        onBlur={() => {
+          setSpeedInputFocused(false);
+          commitSpeedDraft();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            (e.target as HTMLInputElement).blur();
+          }
+        }}
+        className={`w-14 rounded-md px-1.5 py-1 text-center text-xs font-semibold tabular-nums outline-none focus:ring-1 [color-scheme:dark] ${
+          compact
+            ? "border border-amber-500/20 bg-slate-950 text-amber-50 ring-amber-500/40 focus:border-amber-500/50"
+            : "border border-slate-600 bg-slate-950 text-amber-100 ring-amber-500/40 focus:border-amber-500/50"
+        }`}
+      />
+      <span className={`text-xs ${compact ? "text-amber-100/70" : "text-slate-500"}`}>
+        ×
+      </span>
+    </div>
+  );
+}
+
+export function TradingTimeModeStrip({
+  variant = "strip",
+}: {
+  variant?: StripVariant;
+}) {
   const [modalOpen, setModalOpen] = useState(false);
   const [speedDraft, setSpeedDraft] = useState("1");
   const [speedInputFocused, setSpeedInputFocused] = useState(false);
@@ -257,14 +311,18 @@ export function TradingTimeModeStrip() {
   );
 
   const togglePlay = useCallback(() => {
-    setHistoricPlaybackPaused((p) => !p);
+    setHistoricPlaybackPaused((paused) => !paused);
   }, [setHistoricPlaybackPaused]);
 
-  useEffect(() => {
-    if (!speedInputFocused) {
-      setSpeedDraft(formatSpeedDraft(speedMultiplier));
+  const switchToPractice = useCallback(() => {
+    const resumeDate = isoTimestampToLocalDateInput(startDate);
+    if (resumeDate) {
+      beginHistoricSessionAt(resumeDate);
+      setTradingTimeMode("historic");
+      return;
     }
-  }, [speedInputFocused, speedMultiplier]);
+    setModalOpen(true);
+  }, [beginHistoricSessionAt, setTradingTimeMode, startDate]);
 
   const commitSpeedDraft = useCallback(() => {
     const raw = speedDraft.replace(",", ".").trim();
@@ -288,16 +346,151 @@ export function TradingTimeModeStrip() {
   ]);
 
   const isHistoric = tradingTimeMode === "historic";
+  const speedInputValue = formatSpeedDraft(speedMultiplier);
+
+  const modal = (
+    <TradingTimeModeModal
+      key={modalOpen ? `${tradingTimeMode}:${startDate ?? ""}` : "closed"}
+      open={modalOpen}
+      onClose={() => setModalOpen(false)}
+      currentMode={tradingTimeMode}
+      startDate={startDate}
+      onApply={handleApplySessionMode}
+    />
+  );
+
+  if (variant === "sidebar") {
+    return (
+      <>
+        {modal}
+        <section className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Session
+              </p>
+              <p className="mt-1 text-sm font-semibold text-white">
+                {isHistoric ? "Practice mode" : "Live mode"}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-slate-400">
+                {isHistoric
+                  ? "Replay market time without losing your live paper portfolio."
+                  : "Watch live quotes and keep your live paper portfolio active."}
+              </p>
+            </div>
+            <span
+              className={`inline-flex h-9 w-9 items-center justify-center rounded-xl border ${
+                isHistoric
+                  ? "border-amber-500/25 bg-amber-500/10 text-amber-300"
+                  : "border-emerald-500/20 bg-emerald-500/10 text-emerald-300"
+              }`}
+            >
+              {isHistoric ? (
+                <History className="h-4 w-4" aria-hidden />
+              ) : (
+                <Radio className="h-4 w-4" aria-hidden />
+              )}
+            </span>
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setTradingTimeMode("live")}
+              className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${
+                !isHistoric
+                  ? "bg-emerald-500 text-slate-950 hover:bg-emerald-400"
+                  : "border border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-600 hover:bg-slate-800"
+              }`}
+            >
+              Live
+            </button>
+            <button
+              type="button"
+              onClick={switchToPractice}
+              className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${
+                isHistoric
+                  ? "bg-amber-400 text-slate-950 hover:bg-amber-300"
+                  : "border border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-600 hover:bg-slate-800"
+              }`}
+            >
+              Practice
+            </button>
+          </div>
+
+          {isHistoric ? (
+            <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-950/30 p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-200/80">
+                Simulated time
+              </p>
+              <time
+                className="mt-1 block text-sm font-medium leading-5 text-amber-50"
+                dateTime={simulatedDate ?? undefined}
+                title={formatSimulatedTime(simulatedDate)}
+              >
+                {formatSimulatedTime(simulatedDate)}
+              </time>
+
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={togglePlay}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/20 px-2.5 py-1.5 text-xs font-semibold text-amber-100 transition hover:bg-amber-500/30"
+                  aria-pressed={!historicPlaybackPaused}
+                >
+                  {historicPlaybackPaused ? (
+                    <>
+                      <Play className="h-3.5 w-3.5" />
+                      Play
+                    </>
+                  ) : (
+                    <>
+                      <Pause className="h-3.5 w-3.5" />
+                      Pause
+                    </>
+                  )}
+                </button>
+
+                <SpeedControl
+                  inputId="sidebar-historic-speed"
+                  speedInputValue={speedInputValue}
+                  speedMultiplier={speedMultiplier}
+                  speedDraft={speedDraft}
+                  speedInputFocused={speedInputFocused}
+                  setSpeedDraft={setSpeedDraft}
+                  setSpeedInputFocused={setSpeedInputFocused}
+                  commitSpeedDraft={commitSpeedDraft}
+                  compact
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setModalOpen(true)}
+                className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-amber-500/20 bg-slate-950/70 px-3 py-2 text-xs font-semibold text-amber-100 transition hover:border-amber-500/35 hover:bg-slate-900"
+              >
+                <Settings2 className="h-3.5 w-3.5" />
+                Change practice date
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setModalOpen(true)}
+              className="mt-4 inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-medium text-slate-200 transition hover:border-slate-600 hover:bg-slate-800"
+            >
+              <Settings2 className="h-3.5 w-3.5" />
+              Choose practice session
+            </button>
+          )}
+        </section>
+      </>
+    );
+  }
 
   return (
     <>
-      <TradingTimeModeModal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        currentMode={tradingTimeMode}
-        startDate={startDate}
-        onApply={handleApplySessionMode}
-      />
+      {modal}
 
       <div
         className={`sticky top-0 z-10 -mx-4 mb-4 flex flex-col gap-2 border-b px-4 py-2.5 backdrop-blur-md md:-mx-6 md:px-6 lg:-mx-8 lg:px-8 ${
@@ -317,7 +510,7 @@ export function TradingTimeModeStrip() {
                 </span>
                 <div className="min-w-0">
                   <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-200/90">
-                    Historic
+                    Practice
                   </p>
                   <p className="truncate text-xs text-slate-400 sm:text-sm">
                     <span className="hidden text-slate-500 sm:inline">
@@ -370,42 +563,21 @@ export function TradingTimeModeStrip() {
                   </>
                 )}
               </button>
-              <div className="flex items-center gap-1.5">
-                <label
-                  htmlFor="global-historic-speed"
-                  className="text-[10px] font-semibold uppercase tracking-wider text-slate-500"
-                >
-                  Speed
-                </label>
-                <input
-                  id="global-historic-speed"
-                  type="text"
-                  inputMode="decimal"
-                  autoComplete="off"
-                  aria-describedby="global-historic-speed-hint"
-                  value={speedDraft}
-                  onChange={(e) => setSpeedDraft(e.target.value)}
-                  onFocus={() => setSpeedInputFocused(true)}
-                  onBlur={() => {
-                    setSpeedInputFocused(false);
-                    commitSpeedDraft();
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      (e.target as HTMLInputElement).blur();
-                    }
-                  }}
-                  className="w-14 rounded-md border border-slate-600 bg-slate-950 px-1.5 py-1 text-center text-xs font-semibold tabular-nums text-amber-100 outline-none ring-amber-500/40 focus:border-amber-500/50 focus:ring-1 [color-scheme:dark]"
-                />
-                <span className="text-xs text-slate-500">×</span>
-                <span
-                  id="global-historic-speed-hint"
-                  className="hidden text-[10px] text-slate-500 lg:inline"
-                >
-                  {HISTORIC_SPEED_MIN}–{HISTORIC_SPEED_MAX}
-                </span>
-              </div>
+
+              <SpeedControl
+                inputId="global-historic-speed"
+                speedInputValue={speedInputValue}
+                speedMultiplier={speedMultiplier}
+                speedDraft={speedDraft}
+                speedInputFocused={speedInputFocused}
+                setSpeedDraft={setSpeedDraft}
+                setSpeedInputFocused={setSpeedInputFocused}
+                commitSpeedDraft={commitSpeedDraft}
+              />
+
+              <span className="hidden text-[10px] text-slate-500 lg:inline">
+                {HISTORIC_SPEED_MIN}–{HISTORIC_SPEED_MAX}
+              </span>
             </div>
           ) : null}
 
@@ -418,15 +590,6 @@ export function TradingTimeModeStrip() {
               <Settings2 className="h-3.5 w-3.5" />
               Session
             </button>
-            {isHistoric ? (
-              <Link
-                href="/trade"
-                className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-900 transition hover:bg-white"
-              >
-                Trade
-                <ChevronRight className="h-3.5 w-3.5" />
-              </Link>
-            ) : null}
           </div>
         </div>
       </div>

@@ -29,6 +29,8 @@ class QuoteResponse(BaseModel):
     modelVersion: str
     selectedModelProfile: ModelProfile | None = None
     selectedChartType: ChartType = "line"
+    marketDataProvider: Literal["yfinance", "alpaca"] | None = None
+    marketDataInterval: str | None = None
     history: list[float]
     technicals: TechnicalSnapshot
     chartDataUri: str | None = None
@@ -108,6 +110,7 @@ class NewsReportResponse(BaseModel):
     report: str
     studentReasoning: str | None = None
     reasoningSource: Literal["qwen", "template", "remote-llm"] = "template"
+    recommendedAction: Literal["buy", "sell", "hold"] = "hold"
     signal: SignalLabel
     confidence: float = Field(ge=0, le=100)
     modelVersion: str

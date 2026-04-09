@@ -26,10 +26,10 @@ export function StockCard({
   compact = false,
   isPriceLoading = false,
 }: StockCardProps) {
-  const ticker = quote?.ticker ?? tickerProp ?? "—";
-  const companyName = quote?.companyName ?? nameProp ?? "";
-  const lastPrice = quote?.lastPrice ?? priceProp ?? 0;
-  const changePercent = quote?.changePercent ?? changeProp ?? 0;
+  const ticker = tickerProp ?? quote?.ticker ?? "—";
+  const companyName = nameProp ?? quote?.companyName ?? "";
+  const lastPrice = priceProp ?? quote?.lastPrice ?? 0;
+  const changePercent = changeProp ?? quote?.changePercent ?? 0;
 
   const changeColor =
     changePercent > 0

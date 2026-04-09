@@ -5,7 +5,21 @@ TradeWise is split into two parts:
 - `frontend/`: Next.js app, Firebase auth, dashboard, trade UI, and the same-origin ML proxy routes.
 - `backend/`: Python FastAPI ML service powered by `numpy`, `pandas`, `matplotlib`, and `QuantLib`.
 
-## Run It
+## Setup & Run It
+
+First, set up your environment variables based on the provided examples:
+
+```bash
+# Set up frontend environment (Firebase config)
+cp frontend/.env.example frontend/.env.local
+
+# Set up backend environment (API keys & settings)
+cp backend/.env.example backend/.env
+```
+
+*Note: If you just created or modified these `.env` files while the server was running, you must restart it to pick up the changes.*
+
+Then, start both services together:
 
 ```bash
 npm run dev

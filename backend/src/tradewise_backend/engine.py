@@ -25,7 +25,12 @@ from .features import (
     build_latest_features,
     discount_factor,
 )
-from .market_data import get_close_history, get_ohlc_history
+from .market_data import (
+    DEFAULT_MARKET_DATA_INTERVAL,
+    get_close_history,
+    get_ohlc_history,
+    normalize_market_data_provider,
+)
 from .model_runtime import load_model_bundle, normalize_model_profile, predict_signal
 from .news import build_news_context
 from .schemas import (
@@ -255,11 +260,12 @@ def build_quote_response(
     ticker = validate_ticker(normalize_ticker(raw_ticker))
     selected_model_profile = normalize_model_profile(model_profile)
     selected_chart_type = normalize_chart_type(chart_type)
+    selected_provider = normalize_market_data_provider(provider)
     profile = _price_profile(ticker)
     history = get_close_history(
         ticker,
         length=HISTORY_LENGTH,
-        provider=provider,
+        provider=selected_provider,
         as_of=as_of,
     )
     latest_features = build_latest_features(history, annual_rate=DEFAULT_ANNUAL_RATE)
@@ -323,6 +329,8 @@ def build_quote_response(
         modelVersion=model_version,
         selectedModelProfile=selected_model_profile,
         selectedChartType=selected_chart_type,
+        marketDataProvider=selected_provider,
+        marketDataInterval=DEFAULT_MARKET_DATA_INTERVAL,
         history=[round(value, 2) for value in history.tolist()],
         technicals=technicals,
         chartDataUri=(
@@ -330,7 +338,7 @@ def build_quote_response(
                 get_ohlc_history(
                     ticker,
                     length=HISTORY_LENGTH,
-                    provider=provider,
+                    provider=selected_provider,
                     as_of=as_of,
                 ),
                 ticker,

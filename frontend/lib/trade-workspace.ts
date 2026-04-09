@@ -13,11 +13,13 @@ export const TRADE_STORAGE_KEYS = {
   modelProfile: "tradewise.modelProfile",
   refreshCadence: "tradewise.refreshCadence",
   autoTradeEnabled: "tradewise.autoTradeEnabled",
+  historicReplayWindowHours: "tradewise.historicReplayWindowHours",
   preferredSectors: "tradewise.preferredSectors",
   workspace: "tradewise.tradeWorkspace",
 } as const;
 
 export const MAX_TRACKED_TICKERS = 3;
+export const HISTORIC_REPLAY_WINDOW_HOURS = [3, 6, 12] as const;
 export const SECTOR_OPTIONS = [
   "Technology",
   "Healthcare",
@@ -30,9 +32,13 @@ export const SECTOR_OPTIONS = [
 export const TRADE_WORKSPACE_TTL_MS = 90_000;
 
 export type TradeMode = "manual" | "model";
+export type HistoricReplayWindowHours =
+  (typeof HISTORIC_REPLAY_WINDOW_HOURS)[number];
 
 /** Historic = trade against a fixed start window with simulated clock; live = real-time behavior. */
 export type TradingTimeMode = "historic" | "live";
+
+const DEFAULT_HISTORIC_REPLAY_WINDOW_HOURS: HistoricReplayWindowHours = 6;
 
 /**
  * Parse `YYYY-MM-DD` from `<input type="date">` into ISO for local start-of-day (midnight).
@@ -308,17 +314,119 @@ export function readStoredTradeMode(): TradeMode {
   return "manual";
 }
 
-/** Minimum span so historic playback can tick for a while without hitting max immediately. */
-const MIN_TIMELINE_SPAN_MS = 6 * 60 * 60 * 1000;
+export function normalizeHistoricReplayWindowHours(
+  value: number | string | null | undefined,
+): HistoricReplayWindowHours {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : NaN;
+  return HISTORIC_REPLAY_WINDOW_HOURS.includes(
+    parsed as HistoricReplayWindowHours,
+  )
+    ? (parsed as HistoricReplayWindowHours)
+    : DEFAULT_HISTORIC_REPLAY_WINDOW_HOURS;
+}
+
+export function readStoredHistoricReplayWindowHours(): HistoricReplayWindowHours {
+  const stored = readStoredString(TRADE_STORAGE_KEYS.historicReplayWindowHours);
+  return normalizeHistoricReplayWindowHours(stored);
+}
+
 const MAX_SYNTHETIC_TIMELINE_POINTS = 480;
 
-function buildTimelineFromQuote(quote: MockQuote, now: Date): SimulationPricePoint[] {
+function parseQuoteIntervalMs(interval?: string | null): number | null {
+  if (!interval) {
+    return null;
+  }
+  const match = interval.trim().toLowerCase().match(/^(\d+)(m|h|d)$/);
+  if (!match) {
+    return null;
+  }
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return null;
+  }
+  const unit = match[2];
+  if (unit === "m") {
+    return amount * 60_000;
+  }
+  if (unit === "h") {
+    return amount * 60 * 60_000;
+  }
+  return amount * 24 * 60 * 60_000;
+}
+
+function trimTimelineToWindow(
+  points: SimulationPricePoint[],
+  endMs: number,
+  targetWindowMs: number,
+): SimulationPricePoint[] {
+  if (points.length < 2) {
+    return points;
+  }
+
+  const windowStartMs = endMs - targetWindowMs;
+  const firstMs = new Date(points[0].time).getTime();
+  if (Number.isNaN(firstMs) || firstMs >= windowStartMs) {
+    return points;
+  }
+
+  let sliceStart = 0;
+  while (sliceStart < points.length) {
+    const pointMs = new Date(points[sliceStart].time).getTime();
+    if (Number.isNaN(pointMs) || pointMs >= windowStartMs) {
+      break;
+    }
+    sliceStart += 1;
+  }
+
+  if (sliceStart <= 0 || sliceStart >= points.length) {
+    return points.slice(-2);
+  }
+
+  const previous = points[sliceStart - 1];
+  const next = points[sliceStart];
+  const previousMs = new Date(previous.time).getTime();
+  const nextMs = new Date(next.time).getTime();
+  if (
+    Number.isNaN(previousMs) ||
+    Number.isNaN(nextMs) ||
+    nextMs <= previousMs ||
+    windowStartMs <= previousMs
+  ) {
+    return points.slice(sliceStart);
+  }
+
+  const ratio = (windowStartMs - previousMs) / (nextMs - previousMs);
+  const boundaryPrice = previous.price + (next.price - previous.price) * ratio;
+  return [
+    {
+      time: new Date(windowStartMs).toISOString(),
+      price: Number(boundaryPrice.toFixed(4)),
+    },
+    ...points.slice(sliceStart),
+  ];
+}
+
+function buildTimelineFromQuote(
+  quote: MockQuote,
+  now: Date,
+  timelineWindowHours: HistoricReplayWindowHours = DEFAULT_HISTORIC_REPLAY_WINDOW_HOURS,
+): SimulationPricePoint[] {
   const history = quote.history?.length ? quote.history : [quote.lastPrice];
   const endMs = now.getTime();
+  const intervalMs = parseQuoteIntervalMs(quote.marketDataInterval) ?? 60_000;
+  const targetWindowMs = Math.max(
+    intervalMs * 2,
+    timelineWindowHours * 60 * 60 * 1000,
+  );
   const points: SimulationPricePoint[] = [];
   for (let index = 0; index < history.length; index += 1) {
     const offset = history.length - index - 1;
-    const time = new Date(endMs - offset * 60_000).toISOString();
+    const time = new Date(endMs - offset * intervalMs).toISOString();
     points.push({
       time,
       price: Number(history[index]?.toFixed?.(4) ?? history[index]),
@@ -326,21 +434,24 @@ function buildTimelineFromQuote(quote: MockQuote, now: Date): SimulationPricePoi
   }
   if (points.length === 1) {
     points.unshift({
-      time: new Date(endMs - 60_000).toISOString(),
+      time: new Date(endMs - intervalMs).toISOString(),
       price: points[0].price,
     });
   }
-  let spanMs = endMs - new Date(points[0].time).getTime();
+  const boundedPoints = trimTimelineToWindow(points, endMs, targetWindowMs);
+  let spanMs = endMs - new Date(boundedPoints[0].time).getTime();
   while (
-    spanMs < MIN_TIMELINE_SPAN_MS &&
-    points.length < MAX_SYNTHETIC_TIMELINE_POINTS
+    spanMs < targetWindowMs &&
+    boundedPoints.length < MAX_SYNTHETIC_TIMELINE_POINTS
   ) {
-    const first = points[0];
-    const nextTime = new Date(new Date(first.time).getTime() - 60_000).toISOString();
-    points.unshift({ time: nextTime, price: first.price });
-    spanMs = endMs - new Date(points[0].time).getTime();
+    const first = boundedPoints[0];
+    const nextTime = new Date(
+      new Date(first.time).getTime() - intervalMs,
+    ).toISOString();
+    boundedPoints.unshift({ time: nextTime, price: first.price });
+    spanMs = endMs - new Date(boundedPoints[0].time).getTime();
   }
-  return points;
+  return boundedPoints;
 }
 
 function latestPoint(points: SimulationPricePoint[]): SimulationPricePoint | null {
@@ -351,10 +462,20 @@ export function createSimulationFromQuotes(
   quotesByTicker: Record<string, MockQuote>,
   now: Date,
   selectedTicker?: string,
+  options: {
+    timelineWindowHours?: HistoricReplayWindowHours;
+  } = {},
 ): TradingSimulation {
   const priceTimelineBySymbol: Record<string, SimulationPricePoint[]> = {};
+  const timelineWindowHours = normalizeHistoricReplayWindowHours(
+    options.timelineWindowHours,
+  );
   for (const quote of Object.values(quotesByTicker)) {
-    priceTimelineBySymbol[quote.ticker] = buildTimelineFromQuote(quote, now);
+    priceTimelineBySymbol[quote.ticker] = buildTimelineFromQuote(
+      quote,
+      now,
+      timelineWindowHours,
+    );
   }
 
   const selectedPoints =
@@ -383,15 +504,43 @@ export function getPriceAtTime(
     throw new Error(`No price timeline for ${symbol}.`);
   }
 
-  let resolved = points[0];
-  for (const point of points) {
-    if (point.time <= simulationTime) {
-      resolved = point;
+  const targetMs = new Date(simulationTime).getTime();
+  if (Number.isNaN(targetMs) || points.length === 1) {
+    return points[points.length - 1].price;
+  }
+
+  const firstMs = new Date(points[0].time).getTime();
+  if (!Number.isNaN(firstMs) && targetMs <= firstMs) {
+    return points[0].price;
+  }
+
+  for (let index = 1; index < points.length; index += 1) {
+    const next = points[index];
+    const nextMs = new Date(next.time).getTime();
+    if (Number.isNaN(nextMs)) {
       continue;
     }
-    break;
+    if (targetMs > nextMs) {
+      continue;
+    }
+
+    const previous = points[index - 1] ?? next;
+    const previousMs = new Date(previous.time).getTime();
+    if (
+      Number.isNaN(previousMs) ||
+      targetMs <= previousMs ||
+      nextMs <= previousMs
+    ) {
+      return previous.price;
+    }
+
+    const ratio = (targetMs - previousMs) / (nextMs - previousMs);
+    return Number(
+      (previous.price + (next.price - previous.price) * ratio).toFixed(4),
+    );
   }
-  return resolved.price;
+
+  return points[points.length - 1].price;
 }
 
 export function executeTrade(

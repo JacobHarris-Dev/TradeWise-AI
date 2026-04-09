@@ -23,6 +23,7 @@ DEFAULT_REMOTE_LLM_TIMEOUT_SECONDS = 60.0
 class ReasoningResult:
     text: str
     source: str
+    action: str | None = None
 
 
 @dataclass
@@ -30,6 +31,7 @@ class _ReasoningCacheEntry:
     key: str
     text: str
     source: str
+    action: str | None
     cached_at: float
 
 
@@ -273,28 +275,88 @@ def _chat_completion_with_fallback(
     return ReasoningResult(text=template_text, source="template")
 
 
-def _template_reasoning(
-    ticker: str,
+def _normalize_sentiment(sentiment: str | None) -> str:
+    if sentiment in {"positive", "negative", "neutral"}:
+        return sentiment
+    return "neutral"
+
+
+def _recommended_trade_action(
+    *,
     signal: str,
     confidence: float,
     sentiment: str | None,
+    change_percent: float,
+    momentum: float,
+    short_moving_average: float,
+    long_moving_average: float,
+) -> str:
+    normalized_sentiment = _normalize_sentiment(sentiment)
+    trend_up = short_moving_average >= long_moving_average and momentum >= -0.0025
+    trend_down = short_moving_average < long_moving_average and momentum <= 0.0025
+
+    if signal == "bullish":
+        return "buy"
+    if signal == "bearish":
+        return "sell"
+
+    if normalized_sentiment == "positive" and (trend_up or change_percent >= -0.5):
+        return "buy"
+    if normalized_sentiment == "negative" and (trend_down or change_percent <= 0.5):
+        return "sell"
+
+    if trend_up and change_percent >= -0.75:
+        return "buy"
+    if trend_down and change_percent <= 0.75:
+        return "sell"
+
+    if (
+        confidence < 54.0
+        and normalized_sentiment == "neutral"
+        and abs(change_percent) < 0.6
+        and abs(momentum) < 0.01
+    ):
+        return "hold"
+
+    return "buy" if change_percent >= 0 else "sell"
+
+
+def _template_reasoning(
+    ticker: str,
+    action: str,
+    signal: str,
+    confidence: float,
+    sentiment: str | None,
+    change_percent: float,
+    momentum: float,
+    short_moving_average: float,
+    long_moving_average: float,
     topics: list[str],
     headlines: list[str],
 ) -> str:
-    action_text = (
-        "buying is more supported than selling"
-        if signal == "bullish"
-        else "selling or trimming looks safer than buying"
-        if signal == "bearish"
-        else "waiting looks cleaner than forcing a buy or sell"
-    )
+    trend_direction = "up" if short_moving_average >= long_moving_average else "down"
+    move_text = f"{change_percent:+.2f}%"
+    momentum_text = f"{momentum * 100:+.1f}%"
     topic_text = ", ".join(topics[:2]) if topics else "general market updates"
     headline_text = headlines[0] if headlines else "No fresh headline was available."
-    sentiment_text = sentiment or "neutral"
+    sentiment_text = _normalize_sentiment(sentiment)
+
+    if action == "buy":
+        return (
+            f"Buy {ticker} here because TradeWise sees more upside support than downside risk right now. "
+            f"The model still leans {signal} at {confidence:.1f}% confidence, the short trend is {trend_direction}, the latest move is {move_text}, and recent momentum is {momentum_text}. "
+            f"News tone is {sentiment_text} around {topic_text}, so the main headline to watch is: {headline_text}."
+        )
+    if action == "sell":
+        return (
+            f"Sell or trim {ticker} here because protecting capital looks cleaner than pressing for more upside right now. "
+            f"The model leans {signal} at {confidence:.1f}% confidence, the short trend is {trend_direction}, the latest move is {move_text}, and recent momentum is {momentum_text}. "
+            f"News tone is {sentiment_text} around {topic_text}, so the main headline to watch is: {headline_text}."
+        )
     return (
-        f"For {ticker}, the current setup suggests that {action_text} because the model leans {signal} at {confidence:.1f}% confidence. "
-        f"News tone looks {sentiment_text}, mostly around {topic_text}, which is either supporting the move or making the setup less clear. "
-        f"The headline most worth watching right now is: {headline_text}."
+        f"Hold {ticker} for now because the setup is genuinely mixed and TradeWise does not have a clean edge for a buy or sell yet. "
+        f"The model is only {confidence:.1f}% confident, the short trend is {trend_direction}, the latest move is {move_text}, and recent momentum is {momentum_text}. "
+        f"News tone is {sentiment_text} around {topic_text}, and the headline most worth watching is: {headline_text}."
     )
 
 
@@ -345,18 +407,26 @@ def _bucketed_value(value: float, step: float) -> str:
 
 def _cache_key(
     ticker: str,
+    action: str,
     signal: str,
     confidence: float,
     sentiment: str | None,
+    change_percent: float,
+    momentum: float,
+    trend_direction: str,
     topics: list[str],
     headlines: list[str],
 ) -> str:
     return "|".join(
         [
             ticker,
+            action,
             signal,
             f"{confidence:.1f}",
             sentiment or "neutral",
+            f"{change_percent:.2f}",
+            f"{momentum:.4f}",
+            trend_direction,
             ",".join(topics[:3]),
             " || ".join(headlines[:3]),
         ]
@@ -373,15 +443,21 @@ def _cached_reasoning(key: str, ttl_seconds: int) -> ReasoningResult | None:
             return None
         if (now - cached.cached_at) > ttl_seconds:
             return None
-        return ReasoningResult(text=cached.text, source=cached.source)
+        return ReasoningResult(text=cached.text, source=cached.source, action=cached.action)
 
 
-def _store_cached_reasoning(key: str, text: str, source: str) -> None:
+def _store_cached_reasoning(
+    key: str,
+    text: str,
+    source: str,
+    action: str | None = None,
+) -> None:
     with _REASONING_LOCK:
         _REASONING_CACHE[key] = _ReasoningCacheEntry(
             key=key,
             text=text,
             source=source,
+            action=action,
             cached_at=monotonic(),
         )
 
@@ -550,54 +626,107 @@ def _load_qwen():
 
 def _qwen_reasoning(
     ticker: str,
+    action: str,
     signal: str,
     confidence: float,
     sentiment: str | None,
+    change_percent: float,
+    momentum: float,
+    short_moving_average: float,
+    long_moving_average: float,
     topics: list[str],
     headlines: list[str],
 ) -> ReasoningResult:
     headline_block = "\n".join([f"- {headline}" for headline in headlines[:3]]) or "- No headline available"
     topic_text = ", ".join(topics[:3]) if topics else "none"
-    sentiment_text = sentiment or "neutral"
-
+    sentiment_text = _normalize_sentiment(sentiment)
+    trend_direction = "up" if short_moving_average >= long_moving_average else "down"
+    decision_label = action.upper()
     prompt = (
-        "You are a finance tutor for college students. "
-        "Explain what today's headlines may mean in plain language with no jargon. "
-        "Keep it short: 4-6 sentences, direct and practical.\n\n"
+        "You are TradeWise AI, explaining one trading decision to a beginner. "
+        "Use exactly 3 sentences. "
+        "Sentence 1 must start with the decision word itself: Buy, Sell, or Hold. "
+        "Sentence 2 must justify the decision using the model signal, confidence, short trend, recent momentum, and the latest move. "
+        "Sentence 3 must explain how the current news tone or headlines support or weaken that decision. "
+        "Use Hold only because the evidence is mixed or weak. "
+        "Do not mention options. Do not hedge with both buy and sell in the same answer.\n\n"
         f"Ticker: {ticker}\n"
+        f"Decision: {decision_label}\n"
         f"Model signal: {signal}\n"
         f"Model confidence: {confidence:.1f}%\n"
+        f"Latest move: {change_percent:+.2f}%\n"
+        f"Recent momentum: {momentum * 100:+.1f}%\n"
+        f"Short trend: {trend_direction}\n"
         f"News sentiment: {sentiment_text}\n"
         f"Topics: {topic_text}\n"
         "Headlines:\n"
         f"{headline_block}\n\n"
-        "Student-friendly reasoning:"
+        "Trade decision explanation:"
     )
 
     if _remote_llm_enabled():
         try:
             reply = _openai_chat_completion(
                 prompt=prompt,
-                system_prompt="You are a finance tutor for college students.",
+                system_prompt="You are TradeWise AI, a decisive paper-trading coach for beginners.",
                 max_new_tokens=180,
             )
             if reply:
-                return ReasoningResult(text=reply, source="remote-llm")
+                return ReasoningResult(text=reply, source="remote-llm", action=action)
         except Exception:
             return ReasoningResult(
-                text=_template_reasoning(ticker, signal, confidence, sentiment, topics, headlines),
+                text=_template_reasoning(
+                    ticker,
+                    action,
+                    signal,
+                    confidence,
+                    sentiment,
+                    change_percent,
+                    momentum,
+                    short_moving_average,
+                    long_moving_average,
+                    topics,
+                    headlines,
+                ),
                 source="template",
+                action=action,
             )
 
     if not _qwen_runtime_supported():
         return ReasoningResult(
-            text=_template_reasoning(ticker, signal, confidence, sentiment, topics, headlines),
+            text=_template_reasoning(
+                ticker,
+                action,
+                signal,
+                confidence,
+                sentiment,
+                change_percent,
+                momentum,
+                short_moving_average,
+                long_moving_average,
+                topics,
+                headlines,
+            ),
             source="template",
+            action=action,
         )
     if not _qwen_can_run_in_current_env():
         return ReasoningResult(
-            text=_template_reasoning(ticker, signal, confidence, sentiment, topics, headlines),
+            text=_template_reasoning(
+                ticker,
+                action,
+                signal,
+                confidence,
+                sentiment,
+                change_percent,
+                momentum,
+                short_moving_average,
+                long_moving_average,
+                topics,
+                headlines,
+            ),
             source="template",
+            action=action,
         )
 
     try:
@@ -607,25 +736,6 @@ def _qwen_reasoning(
 
     try:
         tokenizer, model = _load_qwen()
-
-        headline_block = "\n".join([f"- {headline}" for headline in headlines[:3]]) or "- No headline available"
-        topic_text = ", ".join(topics[:3]) if topics else "none"
-        sentiment_text = sentiment or "neutral"
-
-        prompt = (
-            "You are TradeWise AI, explaining a live paper-trading decision to a beginner. "
-            "Explain whether the current setup supports buying, selling, or waiting right now, and why. "
-            "Keep it short: exactly 3 sentences, plain English, direct, and practical. "
-            "Do not mention options trading. Do not make guarantees.\n\n"
-            f"Ticker: {ticker}\n"
-            f"Model signal: {signal}\n"
-            f"Model confidence: {confidence:.1f}%\n"
-            f"News sentiment: {sentiment_text}\n"
-            f"Topics: {topic_text}\n"
-            "Headlines:\n"
-            f"{headline_block}\n\n"
-            "Trade decision explanation:"
-        )
 
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
         with torch.no_grad() if torch is not None else nullcontext():
@@ -639,15 +749,41 @@ def _qwen_reasoning(
         generated = tokenizer.decode(output_ids[0], skip_special_tokens=True)
         reasoning = generated[len(prompt):].strip() if generated.startswith(prompt) else generated.strip()
         if reasoning:
-            return ReasoningResult(text=reasoning, source="qwen")
+            return ReasoningResult(text=reasoning, source="qwen", action=action)
         return ReasoningResult(
-            text=_template_reasoning(ticker, signal, confidence, sentiment, topics, headlines),
+            text=_template_reasoning(
+                ticker,
+                action,
+                signal,
+                confidence,
+                sentiment,
+                change_percent,
+                momentum,
+                short_moving_average,
+                long_moving_average,
+                topics,
+                headlines,
+            ),
             source="template",
+            action=action,
         )
     except Exception:
         return ReasoningResult(
-            text=_template_reasoning(ticker, signal, confidence, sentiment, topics, headlines),
+            text=_template_reasoning(
+                ticker,
+                action,
+                signal,
+                confidence,
+                sentiment,
+                change_percent,
+                momentum,
+                short_moving_average,
+                long_moving_average,
+                topics,
+                headlines,
+            ),
             source="template",
+            action=action,
         )
 
 
@@ -656,11 +792,35 @@ def build_student_news_reasoning(
     signal: str,
     confidence: float,
     sentiment: str | None,
+    change_percent: float,
+    momentum: float,
+    short_moving_average: float,
+    long_moving_average: float,
     topics: list[str],
     headlines: list[str],
     force_refresh: bool = False,
 ) -> ReasoningResult:
-    key = _cache_key(ticker, signal, confidence, sentiment, topics, headlines)
+    action = _recommended_trade_action(
+        signal=signal,
+        confidence=confidence,
+        sentiment=sentiment,
+        change_percent=change_percent,
+        momentum=momentum,
+        short_moving_average=short_moving_average,
+        long_moving_average=long_moving_average,
+    )
+    key = _cache_key(
+        ticker,
+        action,
+        signal,
+        confidence,
+        sentiment,
+        change_percent,
+        momentum,
+        "up" if short_moving_average >= long_moving_average else "down",
+        topics,
+        headlines,
+    )
     ttl = _reasoning_cache_seconds()
 
     if not force_refresh:
@@ -669,26 +829,86 @@ def build_student_news_reasoning(
             return cached
 
     if _remote_llm_enabled():
-        reasoning = _qwen_reasoning(ticker, signal, confidence, sentiment, topics, headlines)
-        _store_cached_reasoning(key, reasoning.text, reasoning.source)
+        reasoning = _qwen_reasoning(
+            ticker,
+            action,
+            signal,
+            confidence,
+            sentiment,
+            change_percent,
+            momentum,
+            short_moving_average,
+            long_moving_average,
+            topics,
+            headlines,
+        )
+        _store_cached_reasoning(key, reasoning.text, reasoning.source, reasoning.action)
         return reasoning
 
     if not _use_qwen_enabled():
-        text = _template_reasoning(ticker, signal, confidence, sentiment, topics, headlines)
-        _store_cached_reasoning(key, text, "template")
-        return ReasoningResult(text=text, source="template")
+        text = _template_reasoning(
+            ticker,
+            action,
+            signal,
+            confidence,
+            sentiment,
+            change_percent,
+            momentum,
+            short_moving_average,
+            long_moving_average,
+            topics,
+            headlines,
+        )
+        _store_cached_reasoning(key, text, "template", action)
+        return ReasoningResult(text=text, source="template", action=action)
 
     if not _qwen_runtime_supported():
-        text = _template_reasoning(ticker, signal, confidence, sentiment, topics, headlines)
-        _store_cached_reasoning(key, text, "template")
-        return ReasoningResult(text=text, source="template")
+        text = _template_reasoning(
+            ticker,
+            action,
+            signal,
+            confidence,
+            sentiment,
+            change_percent,
+            momentum,
+            short_moving_average,
+            long_moving_average,
+            topics,
+            headlines,
+        )
+        _store_cached_reasoning(key, text, "template", action)
+        return ReasoningResult(text=text, source="template", action=action)
     if not _qwen_can_run_in_current_env():
-        text = _template_reasoning(ticker, signal, confidence, sentiment, topics, headlines)
-        _store_cached_reasoning(key, text, "template")
-        return ReasoningResult(text=text, source="template")
+        text = _template_reasoning(
+            ticker,
+            action,
+            signal,
+            confidence,
+            sentiment,
+            change_percent,
+            momentum,
+            short_moving_average,
+            long_moving_average,
+            topics,
+            headlines,
+        )
+        _store_cached_reasoning(key, text, "template", action)
+        return ReasoningResult(text=text, source="template", action=action)
 
-    reasoning = _qwen_reasoning(ticker, signal, confidence, sentiment, topics, headlines)
-    _store_cached_reasoning(key, reasoning.text, reasoning.source)
+    reasoning = _qwen_reasoning(
+        ticker,
+        action,
+        signal,
+        confidence,
+        sentiment,
+        change_percent,
+        momentum,
+        short_moving_average,
+        long_moving_average,
+        topics,
+        headlines,
+    )
+    _store_cached_reasoning(key, reasoning.text, reasoning.source, reasoning.action)
     return reasoning
 
 

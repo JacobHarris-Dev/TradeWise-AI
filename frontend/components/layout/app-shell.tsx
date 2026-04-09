@@ -58,8 +58,8 @@ export function AppShell({ children }: AppShellProps) {
   const initials = initialsForUser(user?.displayName ?? user?.email);
 
   return (
-    <div className="dark flex min-h-screen bg-slate-950 text-slate-100">
-      <aside className="hidden w-64 flex-col border-r border-slate-800 bg-slate-900 md:flex">
+    <div className="dark flex h-screen overflow-hidden bg-slate-950 text-slate-100">
+      <aside className="sticky top-0 hidden h-screen w-72 shrink-0 overflow-y-auto border-r border-slate-800 bg-slate-900 md:flex md:flex-col">
         <div className="flex h-16 items-center border-b border-slate-800 px-6">
           <Link href="/dashboard" className="flex items-center gap-3">
             <BrandIcon size={36} className="ring-1 ring-white/10" priority />
@@ -69,7 +69,7 @@ export function AppShell({ children }: AppShellProps) {
           </Link>
         </div>
 
-        <nav className="flex-1 space-y-2 px-4 py-6">
+        <nav className="space-y-2 px-4 py-6">
           {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
             const active = pathname === href || pathname.startsWith(`${href}/`);
             return (
@@ -89,7 +89,11 @@ export function AppShell({ children }: AppShellProps) {
           })}
         </nav>
 
-        <div className="border-t border-slate-800 p-4">
+        <div className="border-t border-slate-800 px-4 py-4">
+          <TradingTimeModeStrip variant="sidebar" />
+        </div>
+
+        <div className="mt-auto border-t border-slate-800 p-4">
           <div className="flex items-center gap-3 px-4 py-2 text-slate-400">
             <Settings className="h-5 w-5" />
             <span>Settings</span>
@@ -105,8 +109,8 @@ export function AppShell({ children }: AppShellProps) {
         </div>
       </aside>
 
-      <main className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-slate-800 bg-slate-900/80 px-4 backdrop-blur md:px-6">
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="flex h-16 shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900/80 px-4 backdrop-blur md:px-6">
           <div className="flex items-center md:hidden">
             <Link href="/dashboard" className="flex items-center gap-2">
               <BrandIcon size={32} className="ring-1 ring-white/10" />
@@ -142,8 +146,10 @@ export function AppShell({ children }: AppShellProps) {
           </div>
         </header>
 
-        <div className="flex-1 overflow-auto px-4 py-4 pb-24 md:px-6 md:py-6 md:pb-8 lg:px-8">
-          <TradingTimeModeStrip />
+        <div className="flex-1 overflow-y-auto px-4 py-4 pb-24 md:px-6 md:py-6 md:pb-8 lg:px-8">
+          <div className="md:hidden">
+            <TradingTimeModeStrip />
+          </div>
           {children}
         </div>
       </main>
