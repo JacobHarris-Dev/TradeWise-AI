@@ -1,5 +1,6 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import {
   createContext,
   useCallback,
@@ -115,6 +116,29 @@ function paperAccountFromPerformance(
   };
 }
 
+function collectPassiveHoldingSymbols(
+  activeTickers: string[],
+  simulation: TradingSimulation | null,
+  paperAccount: PaperAccount | null,
+) {
+  const active = new Set(activeTickers);
+  const passive = new Set<string>();
+
+  for (const symbol of Object.keys(simulation?.positions ?? {})) {
+    if (!active.has(symbol)) {
+      passive.add(symbol);
+    }
+  }
+
+  for (const position of paperAccount?.positions ?? []) {
+    if (!active.has(position.ticker)) {
+      passive.add(position.ticker);
+    }
+  }
+
+  return passive;
+}
+
 export type PaperTradeLogEntry = {
   id: string;
   timestamp: string;
@@ -212,8 +236,10 @@ export function TradeWorkspaceProvider({
 }: {
   children: React.ReactNode;
 }) {
+  const pathname = usePathname();
   const { user } = useAuth();
   const accountUserId = user?.uid ?? "guest";
+  const isTradeRoute = pathname?.startsWith("/trade") ?? false;
   const [trackedTickers, setTrackedTickers] = useState<string[]>([]);
   const [selectedTicker, setSelectedTicker] = useState("");
   const [quotesByTicker, setQuotesByTicker] = useState<Record<string, MockQuote>>({});
@@ -256,6 +282,8 @@ export function TradeWorkspaceProvider({
     useState<PersistedTradingState | null>(null);
   const [hasHydratedPersistedState, setHasHydratedPersistedState] =
     useState(false);
+  const simulationRef = useRef<TradingSimulation | null>(null);
+  const paperAccountRef = useRef<PaperAccount | null>(null);
   const skipInitialQuotesRefreshRef = useRef(false);
   const skipInitialPaperAccountRefreshRef = useRef(false);
   const skipInitialNewsRefreshRef = useRef(false);
@@ -267,12 +295,25 @@ export function TradeWorkspaceProvider({
     [simulation],
   );
 
+  useEffect(() => {
+    simulationRef.current = simulation;
+  }, [simulation]);
+
+  useEffect(() => {
+    paperAccountRef.current = paperAccount;
+  }, [paperAccount]);
+
   const applyWorkspaceSnapshot = useCallback(
     (
       snapshot: TradeWorkspaceSnapshot,
       options: { respectFreshness?: boolean } = {},
     ) => {
       const nextTickers = normalizeTrackedTickers(snapshot.trackedTickers);
+      const passiveHoldingSymbols = collectPassiveHoldingSymbols(
+        nextTickers,
+        simulationRef.current,
+        snapshot.paperAccount ?? paperAccountRef.current,
+      );
       const nextSelectedTicker = nextTickers.includes(snapshot.selectedTicker)
         ? snapshot.selectedTicker
         : nextTickers[0] ?? "";
@@ -282,7 +323,16 @@ export function TradeWorkspaceProvider({
 
       setTrackedTickers(nextTickers);
       setSelectedTicker(nextSelectedTicker);
-      setQuotesByTicker(snapshot.quotesByTicker ?? {});
+      setQuotesByTicker((current) => {
+        const nextQuotes = { ...(snapshot.quotesByTicker ?? {}) };
+        for (const symbol of passiveHoldingSymbols) {
+          const existing = current[symbol];
+          if (existing) {
+            nextQuotes[symbol] = existing;
+          }
+        }
+        return nextQuotes;
+      });
       setNewsReportsByTicker(snapshot.newsReportsByTicker ?? {});
       setPaperAccount(snapshot.paperAccount ?? null);
       setAutoTradeResult(snapshot.autoTradeResult ?? null);
@@ -639,6 +689,10 @@ export function TradeWorkspaceProvider({
   }, []);
 
   const removeTrackedTicker = useCallback((ticker: string) => {
+    const keepAsPassiveHolding =
+      Boolean(simulation?.positions[ticker]) ||
+      Boolean(paperAccount?.positions.some((position) => position.ticker === ticker));
+
     setTrackedTickers((current) => {
       const next = current.filter((entry) => entry !== ticker);
       setSelectedTicker((selected) =>
@@ -648,7 +702,9 @@ export function TradeWorkspaceProvider({
     });
     setQuotesByTicker((current) => {
       const next = { ...current };
-      delete next[ticker];
+      if (!keepAsPassiveHolding) {
+        delete next[ticker];
+      }
       return next;
     });
     setNewsReportsByTicker((current) => {
@@ -656,16 +712,13 @@ export function TradeWorkspaceProvider({
       delete next[ticker];
       return next;
     });
-    setPaperTradeLog((current) =>
-      current.filter((entry) => entry.ticker !== ticker),
-    );
     setAutoTradeResult((current) =>
       current?.ticker === ticker ? null : current,
     );
     setMockTradingDay((current) =>
       current?.ticker === ticker ? null : current,
     );
-  }, []);
+  }, [paperAccount, simulation]);
 
   const loadNewsReport = useCallback(
     async (options: { forceRefresh?: boolean; showLoading?: boolean } = {}) => {
@@ -865,7 +918,7 @@ export function TradeWorkspaceProvider({
   }, [autoTradeEnabled, marketSnapshot.isOpen, runAutoTrade, tradeMode]);
 
   useEffect(() => {
-    if (!selectedTicker) {
+    if (!isTradeRoute || !selectedTicker) {
       return;
     }
 
@@ -880,10 +933,10 @@ export function TradeWorkspaceProvider({
     }, CADENCE_MS[refreshCadence]);
 
     return () => window.clearInterval(timer);
-  }, [loadNewsReport, refreshCadence, selectedTicker]);
+  }, [isTradeRoute, loadNewsReport, refreshCadence, selectedTicker]);
 
   useEffect(() => {
-    if (!trackedTickers.length || !marketSnapshot.isOpen) {
+    if (!isTradeRoute || !trackedTickers.length || !marketSnapshot.isOpen) {
       setStreamConnected(false);
       return;
     }
@@ -965,7 +1018,7 @@ export function TradeWorkspaceProvider({
         ws.close();
       }
     };
-  }, [marketSnapshot.isOpen, trackedTickers, tradeMode]);
+  }, [isTradeRoute, marketSnapshot.isOpen, trackedTickers, tradeMode]);
 
   const loadMockTradingDay = useCallback(async () => {
     const raw = selectedTicker || trackedTickers[0] || "";

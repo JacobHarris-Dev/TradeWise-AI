@@ -58,6 +58,19 @@ const TRADE_UI_MODE_STORAGE_KEY = "tradewise.tradeUiMode";
 
 type TradeUiMode = "simple" | "advanced";
 
+function formatReasoningSourceLabel(source?: "qwen" | "template" | "remote-llm" | null) {
+  if (source === "remote-llm") {
+    return "Qwen";
+  }
+  if (source === "qwen") {
+    return "Local Qwen";
+  }
+  if (source === "template") {
+    return "Fallback";
+  }
+  return null;
+}
+
 function InfoHint({ label: _label }: { label: string }) {
   void _label;
   return null;
@@ -147,6 +160,11 @@ export function TradePage() {
   const trackedTickerSummary = trackedTickers.length
     ? trackedTickers.join(", ")
     : currentSymbol;
+  const tradeDecisionExplanation = newsReport?.studentReasoning
+    ?? newsReport?.report
+    ?? quote?.explanation
+    ?? null;
+  const reasoningSourceLabel = formatReasoningSourceLabel(newsReport?.reasoningSource ?? null);
   const streamStatusDescription =
     !marketSnapshot.isOpen
       ? null
@@ -740,6 +758,30 @@ export function TradePage() {
                     Quick take: TradeWise currently leans {SIGNAL_LABELS[quote.signal].toLowerCase()} on {quote.ticker}. Switch to Advanced view for confidence and timing metrics.
                   </p>
                 )}
+
+                <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/80 px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Why this action
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {newsReportLoading ? (
+                        <span className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                          Refreshing
+                        </span>
+                      ) : null}
+                      {reasoningSourceLabel ? (
+                        <span className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">
+                          {reasoningSourceLabel}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                  <p className="mt-3 text-sm leading-6 text-slate-300">
+                    {tradeDecisionExplanation
+                      ?? `TradeWise is waiting for a cleaner signal on ${quote.ticker}. Refresh the live news report to load the latest buy, sell, or wait explanation.`}
+                  </p>
+                </div>
 
                 <TradeTickerNewsReport
                   quote={quote}

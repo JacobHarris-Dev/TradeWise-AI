@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import os
 import random
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
@@ -20,6 +21,17 @@ class StockUniverseRow:
     industry: str
     priority: int
     is_student_friendly: bool
+    aliases: tuple[str, ...] = ()
+    search_terms: tuple[str, ...] = ()
+    theme_tags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class StockUniverseMatch:
+    row: StockUniverseRow
+    match_type: str
+    matched_term: str
+    score: int
 
 
 # Fallback rows keep the feature usable even before a custom CSV is provided.
@@ -57,6 +69,32 @@ _SECTOR_SYNONYMS = {
     "index": "etf",
 }
 
+_COMPANY_STOPWORDS = {
+    "and",
+    "class",
+    "co",
+    "company",
+    "corp",
+    "corporation",
+    "etf",
+    "fund",
+    "group",
+    "holdings",
+    "inc",
+    "incorporated",
+    "limited",
+    "lp",
+    "ltd",
+    "plc",
+    "shares",
+    "technologies",
+    "technology",
+    "trust",
+}
+
+_LOOKUP_SPLIT_RE = re.compile(r"[|;,]")
+_LOOKUP_NORMALIZE_RE = re.compile(r"[^a-z0-9]+")
+
 
 def _normalize_sector_label(value: str) -> str:
     normalized = value.strip().lower()
@@ -72,22 +110,64 @@ def _resolve_universe_csv_path() -> Path:
     return Path(configured) if configured else _default_universe_csv_path()
 
 
-def _normalize_row(raw: dict[str, str]) -> StockUniverseRow | None:
-    ticker = raw.get("ticker", "").strip().upper()
-    company_name = raw.get("company_name", "").strip()
-    sector = raw.get("sector", "").strip()
-    industry = raw.get("industry", "").strip() or sector
+def _coerce_csv_value(raw: dict[str, str | None], key: str) -> str:
+    return (raw.get(key) or "").strip()
+
+
+def _split_lookup_terms(value: str) -> tuple[str, ...]:
+    if not value:
+        return ()
+    deduped: list[str] = []
+    for term in _LOOKUP_SPLIT_RE.split(value):
+        normalized = term.strip()
+        if normalized and normalized not in deduped:
+            deduped.append(normalized)
+    return tuple(deduped)
+
+
+def _normalize_lookup_text(value: str) -> str:
+    return " ".join(_LOOKUP_NORMALIZE_RE.sub(" ", value.lower()).split())
+
+
+def _derive_company_terms(company_name: str) -> tuple[str, ...]:
+    normalized = _normalize_lookup_text(company_name)
+    if not normalized:
+        return ()
+
+    tokens = [
+        token
+        for token in normalized.split()
+        if token not in _COMPANY_STOPWORDS and (len(token) > 2 or token.isdigit())
+    ]
+    if not tokens:
+        return ()
+
+    terms = [token for token in tokens if len(token) > 2]
+    joined = " ".join(tokens)
+    if joined and joined not in terms and joined != normalized:
+        terms.insert(0, joined)
+    return tuple(dict.fromkeys(terms))
+
+
+def _normalize_row(raw: dict[str, str | None]) -> StockUniverseRow | None:
+    ticker = _coerce_csv_value(raw, "ticker").upper()
+    company_name = _coerce_csv_value(raw, "company_name")
+    sector = _coerce_csv_value(raw, "sector")
+    industry = _coerce_csv_value(raw, "industry") or sector
     if not ticker or not company_name or not sector:
         return None
 
-    priority_raw = raw.get("priority", "").strip()
+    priority_raw = _coerce_csv_value(raw, "priority")
     try:
         priority = int(priority_raw) if priority_raw else 100
     except ValueError:
         priority = 100
 
-    student_friendly_raw = raw.get("is_student_friendly", "").strip().lower()
+    student_friendly_raw = _coerce_csv_value(raw, "is_student_friendly").lower()
     is_student_friendly = student_friendly_raw not in {"false", "0", "no"}
+    aliases = _split_lookup_terms(_coerce_csv_value(raw, "aliases"))
+    search_terms = _split_lookup_terms(_coerce_csv_value(raw, "search_terms"))
+    theme_tags = _split_lookup_terms(_coerce_csv_value(raw, "theme_tags"))
 
     return StockUniverseRow(
         ticker=ticker,
@@ -96,6 +176,9 @@ def _normalize_row(raw: dict[str, str]) -> StockUniverseRow | None:
         industry=industry,
         priority=priority,
         is_student_friendly=is_student_friendly,
+        aliases=aliases,
+        search_terms=search_terms,
+        theme_tags=theme_tags,
     )
 
 
@@ -156,8 +239,112 @@ def list_stock_universe_tickers(
     return tuple(dict.fromkeys(row.ticker for row in ordered))
 
 
+def get_stock_universe_row(ticker: str) -> StockUniverseRow | None:
+    normalized = ticker.strip().upper()
+    if not normalized:
+        return None
+
+    for row in get_stock_universe():
+        if row.ticker == normalized:
+            return row
+    return None
+
+
 def _row_sort_key(item: StockUniverseRow) -> tuple[int, int, str, str]:
     return (0 if item.is_student_friendly else 1, item.priority, item.industry, item.ticker)
+
+
+def _lookup_terms(row: StockUniverseRow) -> tuple[tuple[str, str, int], ...]:
+    derived_terms = _derive_company_terms(row.company_name)
+    normalized_company = _normalize_lookup_text(row.company_name)
+    terms: list[tuple[str, str, int]] = []
+    if normalized_company:
+        terms.append((normalized_company, "company", 90))
+    for alias in row.aliases:
+        normalized = _normalize_lookup_text(alias)
+        if normalized:
+            terms.append((normalized, "alias", 110))
+    for term in row.search_terms:
+        normalized = _normalize_lookup_text(term)
+        if normalized:
+            terms.append((normalized, "search-term", 100))
+    for tag in row.theme_tags:
+        normalized = _normalize_lookup_text(tag)
+        if normalized:
+            terms.append((normalized, "theme-tag", 88))
+    for term in derived_terms:
+        normalized = _normalize_lookup_text(term)
+        if normalized:
+            terms.append((normalized, "company-fragment", 78))
+    deduped: list[tuple[str, str, int]] = []
+    seen: set[tuple[str, str]] = set()
+    for term, match_type, base_score in terms:
+        key = (term, match_type)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((term, match_type, base_score))
+    return tuple(deduped)
+
+
+def _match_term_score(
+    prompt_text: str,
+    prompt_tickers: set[str],
+    row: StockUniverseRow,
+) -> StockUniverseMatch | None:
+    best: StockUniverseMatch | None = None
+    if row.ticker in prompt_tickers:
+        best = StockUniverseMatch(
+            row=row,
+            match_type="ticker",
+            matched_term=row.ticker,
+            score=140,
+        )
+
+    for term, match_type, base_score in _lookup_terms(row):
+        if len(term) < 3 or f" {term} " not in prompt_text:
+            continue
+        word_bonus = min(len(term.split()) * 3, 9)
+        match = StockUniverseMatch(
+            row=row,
+            match_type=match_type,
+            matched_term=term,
+            score=base_score + word_bonus,
+        )
+        if best is None or match.score > best.score:
+            best = match
+    return best
+
+
+def _extract_prompt_tickers(prompt: str) -> set[str]:
+    matches = re.findall(r"\$[A-Za-z][A-Za-z0-9.\-]{0,15}\b|\b[A-Z][A-Z0-9.\-]{1,15}\b", prompt)
+    return {match.replace("$", "").upper() for match in matches}
+
+
+def resolve_stock_universe_matches(query: str, *, count: int = DEFAULT_RECOMMENDATION_COUNT) -> list[StockUniverseMatch]:
+    if count < 1 or count > 10:
+        raise ValueError("Count must be between 1 and 10.")
+
+    prompt_text = f" {_normalize_lookup_text(query)} "
+    if not prompt_text.strip():
+        return []
+    prompt_tickers = _extract_prompt_tickers(query)
+
+    matches: list[StockUniverseMatch] = []
+    for row in get_stock_universe():
+        match = _match_term_score(prompt_text, prompt_tickers, row)
+        if match is not None:
+            matches.append(match)
+
+    matches.sort(
+        key=lambda item: (
+            -item.score,
+            0 if item.row.is_student_friendly else 1,
+            item.row.priority,
+            item.row.ticker,
+        ),
+    )
+    return matches[:count]
 
 
 def _selection_rng() -> random.Random:

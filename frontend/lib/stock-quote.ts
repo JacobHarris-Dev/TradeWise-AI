@@ -12,6 +12,8 @@ import type {
   ModelProfile,
   StockRecommendation,
   StockRecommendationsResponse,
+  StockUniverseResolveMatch,
+  StockUniverseResolveResponse,
   WatchSession,
 } from "@/lib/mocks/stock-data";
 
@@ -134,6 +136,35 @@ export async function fetchStockRecommendations(
   }
 
   return ((await response.json()) as StockRecommendationsResponse).results;
+}
+
+export async function resolveStockUniverseQuery(
+  query: string,
+  options: { count?: number } = {},
+): Promise<StockUniverseResolveMatch[]> {
+  const normalizedQuery = query.trim();
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const params = new URLSearchParams({ query: normalizedQuery });
+  if (typeof options.count === "number" && Number.isFinite(options.count)) {
+    params.set("count", String(Math.max(1, Math.floor(options.count))));
+  }
+
+  const response = await fetch(
+    `/api/ml/stock-universe/resolve?${params.toString()}`,
+    {
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response);
+    throw new Error(message || "Could not resolve stock symbols from that prompt.");
+  }
+
+  return ((await response.json()) as StockUniverseResolveResponse).results;
 }
 
 export async function fetchMockTradingDay(
@@ -326,10 +357,20 @@ export async function fetchPaperAccount(userId?: string): Promise<PaperAccount> 
 
 export async function fetchPaperAccountPerformance(
   userId?: string,
+  options: {
+    includeCoach?: boolean;
+    forceCoachRefresh?: boolean;
+  } = {},
 ): Promise<PaperAccountPerformance> {
   const params = new URLSearchParams();
   if (userId?.trim()) {
     params.set("userId", userId.trim());
+  }
+  if (options.includeCoach) {
+    params.set("includeCoach", "true");
+  }
+  if (options.forceCoachRefresh) {
+    params.set("forceCoachRefresh", "true");
   }
   const query = params.toString();
   const url = query
