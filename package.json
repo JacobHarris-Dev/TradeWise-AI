@@ -6,7 +6,12 @@
     "dev:all": "node scripts/dev.mjs",
     "dev:frontend": "npm --prefix frontend run dev",
     "dev:backend": "node scripts/dev-backend.mjs",
-    "build": "npm --prefix frontend run build",
+    "build": "npm run build:all",
+    "build:all": "npm run build:frontend && npm run build:backend",
+    "build:frontend": "npm --prefix frontend run build",
+    "build:backend": "node scripts/build-backend.mjs",
+    "prod": "npm run build:all && npm run start:prod",
+    "start:prod": "node scripts/start.mjs",
     "lint": "npm --prefix frontend run lint"
   }
 }
