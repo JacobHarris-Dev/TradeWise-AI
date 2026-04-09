@@ -7,7 +7,12 @@ import {
   useTradeWorkspace,
   useTradeWorkspaceActions,
 } from "@/components/providers/trade-workspace-provider";
-import type { MockQuote, NewsReport, ModelProfile } from "@/lib/mocks/stock-data";
+import type {
+  MockQuote,
+  NewsReport,
+  ModelProfile,
+  StockUniverseResolveMatch,
+} from "@/lib/mocks/stock-data";
 import {
   fetchInvestmentChatResponse,
   fetchNewsReport,
@@ -15,6 +20,7 @@ import {
   fetchStockQuote,
   fetchStockQuotes,
   fetchStockRecommendations,
+  resolveStockUniverseQuery,
 } from "@/lib/stock-quote";
 import {
   buildQuoteMap,
@@ -133,14 +139,30 @@ function buildQuoteReason(quote: MockQuote) {
   return `${signalLabel} ${confidenceLabel}.`;
 }
 
+function mergePromptSectors(
+  promptSectors: string[],
+  resolvedMatches: StockUniverseResolveMatch[],
+) {
+  const merged = Array.from(
+    new Set([
+      ...resolvedMatches.map((match) => match.sector.trim()).filter(Boolean),
+      ...promptSectors.map((sector) => sector.trim()).filter(Boolean),
+    ]),
+  );
+  return merged.length ? merged.slice(0, MAX_TRACKED_TICKERS) : [...FALLBACK_SECTORS];
+}
+
 async function resolveThreeStockBasket(params: {
   promptSectors: string[];
   explicitTickers: string[];
   modelProfile: ModelProfile;
 }) {
-  const candidateSet = new Set<string>(
-    params.explicitTickers.map((ticker) => ticker.trim().toUpperCase()).filter(Boolean),
-  );
+  const explicitTickers = Array.from(
+    new Set(
+      params.explicitTickers.map((ticker) => ticker.trim().toUpperCase()).filter(Boolean),
+    ),
+  ).slice(0, MAX_TRACKED_TICKERS);
+  const candidateSet = new Set<string>(explicitTickers);
 
   const sectorSets = [params.promptSectors, [...FALLBACK_SECTORS]];
   for (const sectors of sectorSets) {
@@ -230,9 +252,19 @@ async function resolveThreeStockBasket(params: {
     }
   }
 
-  const selectedQuotes = Array.from(quoteMap.values())
-    .sort((a, b) => scoreQuote(b) - scoreQuote(a))
-    .slice(0, MAX_TRACKED_TICKERS);
+  const explicitQuotes = explicitTickers
+    .map((ticker) => quoteMap.get(ticker))
+    .filter((quote): quote is MockQuote => Boolean(quote));
+  const remainingQuotes = Array.from(quoteMap.values())
+    .filter(
+      (quote) =>
+        !explicitQuotes.some((explicitQuote) => explicitQuote.ticker === quote.ticker),
+    )
+    .sort((a, b) => scoreQuote(b) - scoreQuote(a));
+  const selectedQuotes = [...explicitQuotes, ...remainingQuotes].slice(
+    0,
+    MAX_TRACKED_TICKERS,
+  );
 
   if (selectedQuotes.length < MAX_TRACKED_TICKERS) {
     throw new Error("Could not load three stock picks right now.");
@@ -278,12 +310,21 @@ export function InvestmentChatBubble({
 
     try {
       const parsed = parsePrompt(rawPrompt);
+      const resolvedMatches = await resolveStockUniverseQuery(rawPrompt, {
+        count: MAX_TRACKED_TICKERS,
+      });
+      const resolvedTickers = resolvedMatches.map((match) => match.ticker);
+      const resolvedSectors = mergePromptSectors(parsed.sectors, resolvedMatches);
+      const explicitTickers = Array.from(
+        new Set([...parsed.explicitTickers, ...resolvedTickers]),
+      ).slice(0, MAX_TRACKED_TICKERS);
+
       setModelProfile(parsed.modelProfile);
       writeStoredString(TRADE_STORAGE_KEYS.modelProfile, parsed.modelProfile);
 
       const rankedQuotes = await resolveThreeStockBasket({
-        promptSectors: parsed.sectors,
-        explicitTickers: parsed.explicitTickers,
+        promptSectors: resolvedSectors,
+        explicitTickers,
         modelProfile: parsed.modelProfile,
       });
 
@@ -319,7 +360,7 @@ export function InvestmentChatBubble({
         })),
       );
 
-      writeStoredJson(TRADE_STORAGE_KEYS.preferredSectors, parsed.sectors);
+      writeStoredJson(TRADE_STORAGE_KEYS.preferredSectors, resolvedSectors);
       writeStoredJson(TRADE_STORAGE_KEYS.trackedTickers, trackedTickers);
 
       hydrateWorkspace({
@@ -337,7 +378,7 @@ export function InvestmentChatBubble({
       const generated = await fetchInvestmentChatResponse({
         prompt: rawPrompt,
         modelProfile: parsed.modelProfile,
-        sectors: parsed.sectors,
+        sectors: resolvedSectors,
         trackedTickers,
       });
 

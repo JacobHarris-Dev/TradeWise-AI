@@ -49,6 +49,22 @@ export type StockRecommendationsResponse = {
   results: StockRecommendation[];
 };
 
+export type StockUniverseResolveMatch = {
+  ticker: string;
+  companyName: string;
+  sector: string;
+  industry: string;
+  matchType: "ticker" | "company" | "alias" | "search-term" | "theme-tag" | "company-fragment";
+  matchedTerm: string;
+  score: number;
+};
+
+export type StockUniverseResolveResponse = {
+  query: string;
+  count: number;
+  results: StockUniverseResolveMatch[];
+};
+
 export type MockTradingAction = "buy" | "sell" | "hold";
 
 export type MockTradingStep = {
@@ -144,7 +160,7 @@ export type NewsReport = {
   ticker: string;
   report: string;
   studentReasoning?: string | null;
-  reasoningSource?: "qwen" | "template";
+  reasoningSource?: "qwen" | "template" | "remote-llm";
   signal: TradeSignal;
   confidence: number;
   modelVersion: string;
@@ -167,6 +183,8 @@ export type MarketNewsArticle = {
 
 export type MarketNews = {
   summary?: string | null;
+  llmBrief?: string | null;
+  briefSource?: "qwen" | "template" | "remote-llm" | null;
   sentiment: "positive" | "negative" | "neutral";
   topics: string[];
   refreshedAt: string;
@@ -178,7 +196,7 @@ export type MarketNews = {
 
 export type InvestmentChatResponse = {
   reply: string;
-  source: "qwen" | "template";
+  source: "qwen" | "template" | "remote-llm";
 };
 
 export type PaperAccountPosition = {
@@ -223,6 +241,8 @@ export type PaperAccountPerformance = {
   baselineEquity: number;
   positions: PaperAccountPerformancePosition[];
   points: PaperAccountPerformancePoint[];
+  coachSummary?: string | null;
+  coachSource?: "qwen" | "template" | "remote-llm" | null;
   updatedAt: string;
 };
 

@@ -55,6 +55,10 @@ export function TradeTickerNewsReport({
     newsReport?.newsHeadlines?.length
       ? newsReport.newsHeadlines
       : quote.newsHeadlines ?? [];
+  const marketContext =
+    newsReport?.newsSummary
+    ?? quote.newsSummary
+    ?? "Headlines below give the backdrop behind the current TradeWise call.";
 
   return (
     <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/80 px-4 py-3">
@@ -77,9 +81,7 @@ export function TradeTickerNewsReport({
           {(newsReport?.confidence ?? quote.confidence ?? 0).toFixed(1)}% confidence
         </p>
       </div>
-      <p className="mt-3 text-sm leading-6 text-slate-300">
-        {newsReport?.studentReasoning ?? newsReport?.report ?? "No news report yet."}
-      </p>
+      <p className="mt-3 text-sm leading-6 text-slate-300">{marketContext}</p>
       {visibleNewsHeadlines.length ? (
         <div className="mt-3 space-y-2 text-sm leading-6 text-slate-300">
           {visibleNewsHeadlines.map((headline) => (
@@ -215,6 +217,22 @@ export function TradeMarketNews() {
 
       {news ? (
         <>
+          <div className="mt-5 rounded-2xl border border-sky-500/20 bg-sky-500/10 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full bg-sky-500 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-950">
+                Market brief
+              </span>
+              {news.briefSource ? (
+                <span className="rounded-full border border-sky-500/20 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-200">
+                  {news.briefSource}
+                </span>
+              ) : null}
+            </div>
+            <p className="mt-3 text-sm leading-6 text-slate-100">
+              {news.llmBrief ?? news.summary ?? "No market brief available right now."}
+            </p>
+          </div>
+
           <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full bg-indigo-600 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-white">

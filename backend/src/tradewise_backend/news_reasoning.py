@@ -13,6 +13,8 @@ import httpx
 
 DEFAULT_QWEN_MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"
 DEFAULT_REASONING_CACHE_SECONDS = 120
+DEFAULT_MARKET_BRIEF_CACHE_SECONDS = 300
+DEFAULT_PORTFOLIO_COACH_CACHE_SECONDS = 600
 DEFAULT_INVESTMENT_CHAT_MAX_NEW_TOKENS = 96
 DEFAULT_REMOTE_LLM_TIMEOUT_SECONDS = 60.0
 
@@ -43,13 +45,34 @@ def _use_qwen_enabled() -> bool:
     return raw not in {"0", "false", "off", "no"}
 
 
-def _reasoning_cache_seconds() -> int:
-    raw = os.getenv("ML_NEWS_REASONING_CACHE_SECONDS", str(DEFAULT_REASONING_CACHE_SECONDS)).strip()
+def _cache_seconds(env_key: str, default: int) -> int:
+    raw = os.getenv(env_key, str(default)).strip()
     try:
         value = int(raw)
     except ValueError:
-        return DEFAULT_REASONING_CACHE_SECONDS
+        return default
     return max(0, value)
+
+
+def _reasoning_cache_seconds() -> int:
+    return _cache_seconds(
+        "ML_NEWS_REASONING_CACHE_SECONDS",
+        DEFAULT_REASONING_CACHE_SECONDS,
+    )
+
+
+def _market_brief_cache_seconds() -> int:
+    return _cache_seconds(
+        "ML_MARKET_BRIEF_CACHE_SECONDS",
+        DEFAULT_MARKET_BRIEF_CACHE_SECONDS,
+    )
+
+
+def _portfolio_coach_cache_seconds() -> int:
+    return _cache_seconds(
+        "ML_PORTFOLIO_COACH_CACHE_SECONDS",
+        DEFAULT_PORTFOLIO_COACH_CACHE_SECONDS,
+    )
 
 
 def _qwen_model_name() -> str:
@@ -197,6 +220,59 @@ def _openai_chat_completion(
     return content.strip()
 
 
+def _chat_completion_with_fallback(
+    *,
+    system_prompt: str,
+    prompt: str,
+    max_new_tokens: int,
+    template_text: str,
+) -> ReasoningResult:
+    if _remote_llm_enabled():
+        try:
+            reply = _openai_chat_completion(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                max_new_tokens=max_new_tokens,
+            )
+            if reply:
+                return ReasoningResult(text=reply, source="remote-llm")
+        except Exception:
+            return ReasoningResult(text=template_text, source="template")
+
+    if (
+        not _use_qwen_enabled()
+        or not _qwen_runtime_supported()
+        or not _qwen_can_run_chat_in_current_env()
+    ):
+        return ReasoningResult(text=template_text, source="template")
+
+    try:
+        torch = import_module("torch")
+    except ImportError:
+        torch = None
+
+    try:
+        tokenizer, model = _load_qwen()
+        full_prompt = f"{system_prompt}\n\n{prompt}"
+        inputs = tokenizer(full_prompt, return_tensors="pt", truncation=True, max_length=2048)
+        with torch.no_grad() if torch is not None else nullcontext():
+            output_ids = model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                pad_token_id=tokenizer.eos_token_id,
+            )
+
+        generated = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        reply = generated[len(full_prompt):].strip() if generated.startswith(full_prompt) else generated.strip()
+        if reply:
+            return ReasoningResult(text=reply, source="qwen")
+    except Exception:
+        pass
+
+    return ReasoningResult(text=template_text, source="template")
+
+
 def _template_reasoning(
     ticker: str,
     signal: str,
@@ -205,14 +281,66 @@ def _template_reasoning(
     topics: list[str],
     headlines: list[str],
 ) -> str:
+    action_text = (
+        "buying is more supported than selling"
+        if signal == "bullish"
+        else "selling or trimming looks safer than buying"
+        if signal == "bearish"
+        else "waiting looks cleaner than forcing a buy or sell"
+    )
     topic_text = ", ".join(topics[:2]) if topics else "general market updates"
     headline_text = headlines[0] if headlines else "No fresh headline was available."
     sentiment_text = sentiment or "neutral"
     return (
-        f"{ticker} in plain terms: the model leans {signal} ({confidence:.1f}% confidence). "
-        f"News tone looks {sentiment_text}, mostly around {topic_text}. "
-        f"Most important headline right now: {headline_text}."
+        f"For {ticker}, the current setup suggests that {action_text} because the model leans {signal} at {confidence:.1f}% confidence. "
+        f"News tone looks {sentiment_text}, mostly around {topic_text}, which is either supporting the move or making the setup less clear. "
+        f"The headline most worth watching right now is: {headline_text}."
     )
+
+
+def _template_market_brief(
+    summary: str | None,
+    sentiment: str,
+    topics: list[str],
+    headlines: list[str],
+) -> str:
+    lead = summary or "Markets are moving, but the backdrop is mixed."
+    topic_text = ", ".join(topics[:2]) if topics else "broad market drivers"
+    headline_text = headlines[0] if headlines else "No standout headline was available."
+    return (
+        f"{lead} The current tone looks {sentiment}, with the biggest focus on {topic_text}. "
+        f"Headline to watch: {headline_text}."
+    )
+
+
+def _template_portfolio_coach(
+    *,
+    cash: float,
+    total_equity: float,
+    day_change_percent: float,
+    positions: list[dict[str, Any]],
+) -> str:
+    if not positions:
+        return (
+            f"Your paper account is all cash right now at ${cash:.2f}. "
+            "That keeps risk low, but you will need to open positions to learn how the portfolio behaves in live conditions."
+        )
+
+    largest = max(positions, key=lambda item: float(item.get("marketValue", 0.0)))
+    largest_ticker = str(largest.get("ticker", "your largest holding"))
+    return (
+        f"Your paper account is worth ${total_equity:.2f} and is currently {'up' if day_change_percent >= 0 else 'down'} "
+        f"{abs(day_change_percent):.2f}%. "
+        f"{largest_ticker} is your largest holding, so that position has the biggest influence on your results. "
+        f"Cash on hand is ${cash:.2f}, which sets how much flexibility you have for the next move."
+    )
+
+
+def _bucketed_value(value: float, step: float) -> str:
+    if step <= 0:
+        return f"{value:.2f}"
+    bucket = round(value / step) * step
+    return f"{bucket:.2f}"
 
 
 def _cache_key(
@@ -256,6 +384,127 @@ def _store_cached_reasoning(key: str, text: str, source: str) -> None:
             source=source,
             cached_at=monotonic(),
         )
+
+
+def build_market_news_brief(
+    *,
+    summary: str | None,
+    sentiment: str,
+    topics: list[str],
+    headlines: list[str],
+    force_refresh: bool = False,
+) -> ReasoningResult:
+    key = "|".join(
+        [
+            "market-brief",
+            summary or "",
+            sentiment,
+            ",".join(topics[:3]),
+            " || ".join(headlines[:3]),
+        ]
+    )
+    ttl = _market_brief_cache_seconds()
+    if not force_refresh:
+        cached = _cached_reasoning(key, ttl)
+        if cached is not None:
+            return cached
+
+    template_text = _template_market_brief(summary, sentiment, topics, headlines)
+    topic_text = ", ".join(topics[:3]) if topics else "none"
+    headline_block = "\n".join(f"- {headline}" for headline in headlines[:4]) or "- No headline available"
+    prompt = (
+        "Write a short market brief for a student trader in exactly 3 sentences. "
+        "Keep it plain English, practical, and focused on what matters today.\n\n"
+        f"Market summary: {summary or 'No summary available'}\n"
+        f"Sentiment: {sentiment}\n"
+        f"Topics: {topic_text}\n"
+        f"Headlines:\n{headline_block}\n\n"
+        "Brief:"
+    )
+    result = _chat_completion_with_fallback(
+        system_prompt="You are a concise market brief writer for beginner investors.",
+        prompt=prompt,
+        max_new_tokens=120,
+        template_text=template_text,
+    )
+    _store_cached_reasoning(key, result.text, result.source)
+    return result
+
+
+def build_portfolio_coach_reply(
+    *,
+    cash: float,
+    total_equity: float,
+    day_change_percent: float,
+    positions: list[dict[str, Any]],
+    force_refresh: bool = False,
+) -> ReasoningResult:
+    serialized_positions = [
+        {
+            "ticker": str(item.get("ticker", "")),
+            "shares": float(item.get("shares", 0.0)),
+            "marketValue": float(item.get("marketValue", 0.0)),
+            "changePercent": float(item.get("changePercent", 0.0) or 0.0),
+        }
+        for item in positions[:5]
+    ]
+    key = "|".join(
+        [
+            "portfolio-coach-v4",
+            _bucketed_value(cash, 25.0),
+            _bucketed_value(total_equity, 25.0),
+            _bucketed_value(day_change_percent, 0.25),
+            ";".join(
+                f"{item['ticker']}:{item['shares']}:{_bucketed_value(item['marketValue'], 25.0)}:{_bucketed_value(item['changePercent'], 0.25)}"
+                for item in serialized_positions
+            ),
+        ]
+    )
+    ttl = _portfolio_coach_cache_seconds()
+    if not force_refresh:
+        cached = _cached_reasoning(key, ttl)
+        if cached is not None:
+            return cached
+
+    template_text = _template_portfolio_coach(
+        cash=cash,
+        total_equity=total_equity,
+        day_change_percent=day_change_percent,
+        positions=serialized_positions,
+    )
+
+    if serialized_positions:
+        positions_block = "\n".join(
+            (
+                f"- {item['ticker']}: shares={item['shares']:.0f}, "
+                f"market_value=${item['marketValue']:.2f}, change={item['changePercent']:.2f}%"
+            )
+            for item in serialized_positions
+        )
+    else:
+        positions_block = "- No open positions. The account is fully in cash."
+
+    prompt = (
+        "Write a portfolio coach note for a student investor in exactly 3 sentences. "
+        "Mention concentration, cash flexibility, and one practical risk observation. "
+        "If there are no open positions, explain what staying fully in cash means for risk and learning instead of discussing concentration in holdings. "
+        "Do not give guarantees or tell the user to buy specific securities. "
+        "Use only the numbers provided below and do not invent targets, thresholds, or allocations. "
+        "Avoid repeating exact dollar amounts unless they materially help the explanation.\n\n"
+        f"Cash: ${cash:.2f}\n"
+        f"Total equity: ${total_equity:.2f}\n"
+        f"Portfolio change percent: {day_change_percent:.2f}%\n"
+        f"Positions:\n{positions_block}\n\n"
+        "Coach note:"
+    )
+    result = _chat_completion_with_fallback(
+        system_prompt="You are a concise portfolio coach for beginner investors.",
+        prompt=prompt,
+        max_new_tokens=140,
+        template_text=template_text,
+    )
+    _store_cached_reasoning(key, result.text, result.source)
+    return result
 
 
 def _load_qwen():
@@ -358,6 +607,25 @@ def _qwen_reasoning(
 
     try:
         tokenizer, model = _load_qwen()
+
+        headline_block = "\n".join([f"- {headline}" for headline in headlines[:3]]) or "- No headline available"
+        topic_text = ", ".join(topics[:3]) if topics else "none"
+        sentiment_text = sentiment or "neutral"
+
+        prompt = (
+            "You are TradeWise AI, explaining a live paper-trading decision to a beginner. "
+            "Explain whether the current setup supports buying, selling, or waiting right now, and why. "
+            "Keep it short: exactly 3 sentences, plain English, direct, and practical. "
+            "Do not mention options trading. Do not make guarantees.\n\n"
+            f"Ticker: {ticker}\n"
+            f"Model signal: {signal}\n"
+            f"Model confidence: {confidence:.1f}%\n"
+            f"News sentiment: {sentiment_text}\n"
+            f"Topics: {topic_text}\n"
+            "Headlines:\n"
+            f"{headline_block}\n\n"
+            "Trade decision explanation:"
+        )
 
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
         with torch.no_grad() if torch is not None else nullcontext():
