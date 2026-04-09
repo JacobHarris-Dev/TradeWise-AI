@@ -362,6 +362,8 @@ def auto_trade(payload: AutoTradeRequest) -> AutoTradeResponse:
             model_profile=payload.modelProfile,
             cadence=payload.cadence,
             user_id=payload.userId,
+            requested_side=payload.requestedSide,
+            quantity=payload.quantity,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -235,6 +235,8 @@ export async function executeAutoTrade(
     modelProfile?: ModelProfile;
     cadence?: RefreshCadence;
     userId?: string;
+    requestedSide?: "buy" | "sell";
+    quantity?: number;
   } = {},
 ): Promise<AutoTradeResult> {
   const normalized = ticker.trim().toUpperCase();
@@ -253,6 +255,8 @@ export async function executeAutoTrade(
       modelProfile: options.modelProfile ?? "risky",
       cadence: options.cadence ?? "1m",
       userId: options.userId ?? "guest",
+      ...(options.requestedSide ? { requestedSide: options.requestedSide } : {}),
+      ...(typeof options.quantity === "number" ? { quantity: options.quantity } : {}),
     }),
   });
 

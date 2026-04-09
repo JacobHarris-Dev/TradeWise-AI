@@ -17,7 +17,8 @@ function formatMoney(value: number) {
 export function DashboardPage() {
   const { user, loading: authLoading } = useAuth();
   const { portfolio } = usePortfolioWorkspace();
-  const { trackedTickers, simulationSnapshot, tradingTimeMode } = useTradeWorkspace();
+  const { trackedTickers, simulationSnapshot, tradingTimeMode, paperAccount } =
+    useTradeWorkspace();
 
   const useHistoricSim =
     tradingTimeMode === "historic" && simulationSnapshot != null;
@@ -33,13 +34,13 @@ export function DashboardPage() {
     : portfolio?.positionsValue ?? 0;
   const totalEquity = useHistoricSim
     ? simulationSnapshot.portfolioValue
-    : portfolio?.totalEquity ?? portfolio?.cash ?? 0;
+    : portfolio?.totalEquity ?? portfolio?.cash ?? paperAccount?.cash ?? 0;
   const buyingPower = useHistoricSim
     ? simulationSnapshot.cash
-    : portfolio?.cash ?? 0;
+    : portfolio?.cash ?? paperAccount?.cash ?? 0;
   const activePositions = useHistoricSim
     ? simulationSnapshot.positions.length
-    : portfolio?.positions.length ?? 0;
+    : portfolio?.positions.length ?? paperAccount?.positions.length ?? 0;
   const baselineEquity = useHistoricSim
     ? 10_000
     : portfolio?.baselineEquity ?? portfolio?.startingCash ?? 10000;

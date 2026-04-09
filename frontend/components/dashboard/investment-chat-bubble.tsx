@@ -334,8 +334,13 @@ export function InvestmentChatBubble({
       const refreshCadence = readStoredRefreshCadence();
       const newsRefreshSeconds =
         refreshCadence === "15m" ? 900 : refreshCadence === "5m" ? 300 : 60;
-
-      const [paperAccountResult, newsResult] = await Promise.allSettled([
+      const chatPromise = fetchInvestmentChatResponse({
+        prompt: rawPrompt,
+        modelProfile: parsed.modelProfile,
+        sectors: resolvedSectors,
+        trackedTickers,
+      });
+      const sideDataPromise = Promise.allSettled([
         fetchPaperAccount(accountUserId),
         selectedTicker
           ? fetchNewsReport(selectedTicker, {
@@ -344,11 +349,6 @@ export function InvestmentChatBubble({
             })
           : Promise.resolve(null),
       ]);
-
-      const newsReportsByTicker: Record<string, NewsReport> = {};
-      if (newsResult.status === "fulfilled" && newsResult.value?.ticker) {
-        newsReportsByTicker[newsResult.value.ticker] = newsResult.value;
-      }
 
       setSelectedStocks(
         rankedQuotes.map((quote) => ({
@@ -363,6 +363,22 @@ export function InvestmentChatBubble({
       writeStoredJson(TRADE_STORAGE_KEYS.preferredSectors, resolvedSectors);
       writeStoredJson(TRADE_STORAGE_KEYS.trackedTickers, trackedTickers);
 
+      const generated = await chatPromise;
+
+      setMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          text: generated.reply,
+        },
+      ]);
+
+      const [paperAccountResult, newsResult] = await sideDataPromise;
+      const newsReportsByTicker: Record<string, NewsReport> = {};
+      if (newsResult.status === "fulfilled" && newsResult.value?.ticker) {
+        newsReportsByTicker[newsResult.value.ticker] = newsResult.value;
+      }
+
       hydrateWorkspace({
         savedAt: Date.now(),
         trackedTickers,
@@ -374,21 +390,6 @@ export function InvestmentChatBubble({
         autoTradeResult: null,
         lastAction: `AI selected ${trackedTickers.join(", ")} from: "${rawPrompt}"`,
       });
-
-      const generated = await fetchInvestmentChatResponse({
-        prompt: rawPrompt,
-        modelProfile: parsed.modelProfile,
-        sectors: resolvedSectors,
-        trackedTickers,
-      });
-
-      setMessages((current) => [
-        ...current,
-        {
-          role: "assistant",
-          text: generated.reply,
-        },
-      ]);
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Could not process that investment prompt.";

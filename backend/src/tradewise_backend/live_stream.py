@@ -4,6 +4,7 @@ import json
 import os
 from asyncio import Event, Lock, Queue, create_task, sleep
 from collections import defaultdict
+from typing import Any, cast
 
 from fastapi import WebSocket
 
@@ -15,10 +16,16 @@ try:
 except ImportError:  # pragma: no cover - exercised only when websockets is missing
     websockets = None
 
-ALLOWED_STREAM_FEEDS = {"iex", "delayed_sip", "sip"}
+ALLOWED_STREAM_FEEDS: set[LiveStreamFeed] = {"iex", "delayed_sip", "sip"}
 DEFAULT_STREAM_FEED = os.getenv("ML_LIVE_STREAM_FEED", "iex").strip().lower() or "iex"
 MAX_STREAM_SYMBOLS = 30
 _STREAM_LOCK = Lock()
+
+
+def _require_websockets_client() -> Any:
+    if websockets is None:
+        raise RuntimeError("Install websockets to enable the live stock stream.")
+    return websockets
 
 
 class _StreamChannel:
@@ -43,7 +50,7 @@ class _StreamChannel:
         backoff = 1.0
         while not self.stopped.is_set():
             try:
-                async with websockets.connect(self.upstream_url, ping_interval=20, ping_timeout=20) as upstream:
+                async with _require_websockets_client().connect(self.upstream_url, ping_interval=20, ping_timeout=20) as upstream:
                     await upstream.send(
                         json.dumps({"action": "auth", "key": self.key_id, "secret": self.secret_key})
                     )
@@ -71,7 +78,7 @@ class _StreamChannel:
                 price=float(message["p"]),
                 size=int(message.get("s", 0)) if message.get("s") is not None else None,
                 timestamp=str(message.get("t", "")),
-                feed=self.feed,
+                feed=cast(LiveStreamFeed, self.feed),
             ).model_dump()
         elif message.get("T") == "error":
             payload = LiveStreamError(message=str(message.get("msg", "Live stream error."))).model_dump()
@@ -107,7 +114,7 @@ _CHANNELS: dict[str, _StreamChannel] = {}
 def normalize_live_stream_feed(raw_feed: str | None) -> LiveStreamFeed:
     feed = (raw_feed or DEFAULT_STREAM_FEED).strip().lower()
     if feed in ALLOWED_STREAM_FEEDS:
-        return feed  # type: ignore[return-value]
+        return cast(LiveStreamFeed, feed)
     raise ValueError("Invalid live stream feed. Use iex, delayed_sip, or sip.")
 
 
@@ -146,8 +153,7 @@ async def relay_live_trade_stream(
     raw_symbols: str,
     raw_feed: str | None = None,
 ) -> None:
-    if websockets is None:
-        raise RuntimeError("Install websockets to enable the live stock stream.")
+    _ = _require_websockets_client()
 
     tickers = normalize_live_stream_symbols(raw_symbols)
     feed = normalize_live_stream_feed(raw_feed)
@@ -156,8 +162,9 @@ async def relay_live_trade_stream(
 
     await websocket.accept()
 
+    channel_key = f"{feed}:{','.join(tickers)}"
+    queue: Queue[dict] | None = None
     try:
-        channel_key = f"{feed}:{','.join(tickers)}"
         async with _STREAM_LOCK:
             channel = _CHANNELS.get(channel_key)
             if channel is None:
@@ -176,8 +183,8 @@ async def relay_live_trade_stream(
     finally:
         async with _STREAM_LOCK:
             channel = _CHANNELS.get(channel_key)
-            if channel is not None:
-                channel.unsubscribe(queue)  # type: ignore[arg-type]
+            if channel is not None and queue is not None:
+                channel.unsubscribe(queue)
                 if not channel.subscribers:
                     _CHANNELS.pop(channel_key, None)
         await websocket.close()

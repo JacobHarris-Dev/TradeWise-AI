@@ -76,7 +76,8 @@ export function PortfolioPage() {
   const [featuredLoading, setFeaturedLoading] = useState(true);
 
   const usesSimulationPortfolio = Boolean(
-    simulation &&
+    useHistoricSim &&
+      simulation &&
       simulationSnapshot &&
       (
         simulation.trades.length > 0 ||
@@ -250,7 +251,7 @@ export function PortfolioPage() {
         <h1 className="text-3xl font-bold tracking-tight text-white">Portfolio</h1>
       </div>
 
-      <div className="relative overflow-hidden rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-950 p-8 shadow-lg">
+      <div className="relative overflow-hidden rounded-2xl border border-slate-800 bg-linear-to-br from-slate-900 to-slate-950 p-8 shadow-lg">
         <div className="absolute right-0 top-0 h-64 w-64 rounded-full bg-indigo-500/5 blur-3xl" />
         <div className="relative z-10 grid grid-cols-1 gap-8 md:grid-cols-3">
           <div className="space-y-2 border-b border-slate-800 pb-6 md:border-b-0 md:border-r md:pb-0 md:pr-6">
@@ -540,7 +541,7 @@ export function PortfolioPage() {
             description="Cash and open positions across your current paper account"
           />
 
-          <div className="flex max-h-[600px] flex-col rounded-xl border border-slate-800 bg-slate-900 shadow-sm">
+          <div className="flex max-h-150 flex-col rounded-xl border border-slate-800 bg-slate-900 shadow-sm">
             <div className="flex items-center border-b border-slate-800 bg-slate-900/50 px-6 py-5">
               <History className="mr-2 h-5 w-5 text-indigo-400" />
               <h2 className="text-lg font-semibold text-white">Order History</h2>

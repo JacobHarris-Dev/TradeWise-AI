@@ -31,6 +31,7 @@ import type {
   RefreshCadence,
 } from "@/lib/mocks/stock-data";
 import {
+  executeAutoTrade,
   executeAutoTradeBatch,
   fetchMockTradingDay,
   fetchNewsReport,
@@ -38,6 +39,7 @@ import {
   fetchPaperAccountPerformance,
   fetchStockQuotes,
   fetchWatchSession,
+  startWatchSession,
 } from "@/lib/stock-quote";
 import {
   createSimulationFromQuotes,
@@ -253,6 +255,17 @@ export type PaperTradeLogEntry = {
   statusMessage: string;
 };
 
+type LoadTrackedQuotesResult = {
+  quotes: MockQuote[];
+  failures: string[];
+};
+
+type AddTrackedTickerResult = {
+  status: "added" | "exists" | "limit" | "error";
+  message: string;
+  ticker?: string;
+};
+
 type TradeWorkspaceContextValue = {
   accountUserId: string;
   trackedTickers: string[];
@@ -317,7 +330,8 @@ type TradeWorkspaceContextValue = {
   loadTrackedQuotes: (
     targetTickers: string[],
     options?: { showLoading?: boolean; asOf?: string },
-  ) => Promise<void>;
+  ) => Promise<LoadTrackedQuotesResult>;
+  addTrackedTicker: (ticker: string) => Promise<AddTrackedTickerResult>;
   checkSelectedStocks: () => Promise<void>;
   selectTrackedTicker: (ticker: string) => void;
   removeTrackedTicker: (ticker: string) => void;
@@ -429,6 +443,7 @@ export function TradeWorkspaceProvider({
   const [hasHydratedHistoricPersisted, setHasHydratedHistoricPersisted] =
     useState(false);
   const [watchSyncTick, setWatchSyncTick] = useState(0);
+  const [watchSessionReady, setWatchSessionReady] = useState(false);
   const simulationRef = useRef<TradingSimulation | null>(null);
   const paperAccountRef = useRef<PaperAccount | null>(null);
   const skipInitialQuotesRefreshRef = useRef(false);
@@ -1103,10 +1118,10 @@ export function TradeWorkspaceProvider({
     async (
       targetTickers: string[],
       options: { showLoading?: boolean; asOf?: string } = {},
-    ) => {
+    ): Promise<LoadTrackedQuotesResult> => {
       const symbols = normalizeTrackedTickers(targetTickers);
       if (!symbols.length) {
-        return;
+        return { quotes: [], failures: [] };
       }
 
       if (options.showLoading) {
@@ -1199,10 +1214,12 @@ export function TradeWorkspaceProvider({
             setHistoricChartEpoch((e) => e + 1);
           }
         }
+        return { quotes: nextQuotes, failures };
       } catch (err) {
-        setError(
-          err instanceof Error ? err.message : "Could not load quotes.",
-        );
+        const message =
+          err instanceof Error ? err.message : "Could not load quotes.";
+        setError(message);
+        return { quotes: [], failures: [message] };
       } finally {
         if (options.showLoading) {
           setLoading(false);
@@ -1337,9 +1354,117 @@ export function TradeWorkspaceProvider({
     tradingTimeMode,
   ]);
 
+  const syncWatchSession = useCallback(
+    async (tickers: string[]): Promise<boolean> => {
+      if (tradingTimeMode !== "live" || !tickers.length) {
+        setWatchSessionReady(false);
+        return false;
+      }
+
+      try {
+        await startWatchSession(tickers, {
+          userId: accountUserId,
+          modelProfile,
+          cadence: refreshCadence,
+          autoTradeEnabled: tradeMode === "model" ? autoTradeEnabled : false,
+        });
+        setWatchSessionReady(true);
+        return true;
+      } catch (err) {
+        console.error("Could not start watch session.", err);
+        setWatchSessionReady(false);
+        return false;
+      }
+    },
+    [
+      accountUserId,
+      autoTradeEnabled,
+      modelProfile,
+      refreshCadence,
+      tradeMode,
+      tradingTimeMode,
+    ],
+  );
+
+  const addTrackedTicker = useCallback(
+    async (ticker: string): Promise<AddTrackedTickerResult> => {
+      const normalized = ticker.trim().toUpperCase();
+      if (!normalized) {
+        const message = "Enter a ticker symbol before submitting.";
+        setError(message);
+        return { status: "error", message };
+      }
+
+      if (trackedTickersRef.current.includes(normalized)) {
+        setSelectedTicker(normalized);
+        setMockTradingDay(null);
+        setMockTradingError(null);
+        setError(null);
+        const message = `${normalized} is already in your tracked symbols.`;
+        setLastAction(message);
+        return { status: "exists", message, ticker: normalized };
+      }
+
+      if (trackedTickersRef.current.length >= MAX_TRACKED_TICKERS) {
+        const message = `You already have ${MAX_TRACKED_TICKERS} tracked symbols. Remove one before adding another.`;
+        setError(message);
+        return { status: "limit", message };
+      }
+
+      setMockTradingDay(null);
+      setMockTradingError(null);
+      setAutoTradeError(null);
+      setLastAction(null);
+
+      const playhead =
+        simulatedDateRefForQuotes.current ??
+        historicSimulationRef.current?.simulationTime ??
+        startDateRef.current;
+      const asOf =
+        tradingTimeMode === "historic" && playhead
+          ? nextHistoricBarBoundaryIso(playhead, historicBarIntervalMsRef.current) ??
+            playhead
+          : undefined;
+
+      const { quotes, failures } = await loadTrackedQuotes([normalized], {
+        showLoading: true,
+        ...(asOf ? { asOf } : {}),
+      });
+      const nextQuote = quotes.find((quote) => quote.ticker === normalized);
+
+      if (!nextQuote) {
+        const message =
+          failures[0] ?? `Could not load market data for ${normalized}.`;
+        setError(message);
+        return { status: "error", message };
+      }
+
+      const nextTrackedTickers = normalizeTrackedTickers([
+        ...trackedTickersRef.current,
+        normalized,
+      ]);
+      setTrackedTickers(nextTrackedTickers);
+      setSelectedTicker(normalized);
+      setError(null);
+      let message = `Added ${normalized} to your tracked symbols.`;
+      if (tradingTimeMode === "live") {
+        const watchStarted = await syncWatchSession(nextTrackedTickers);
+        if (watchStarted) {
+          setWatchSyncTick((current) => current + 1);
+        } else {
+          message =
+            `${message} Live background syncing is unavailable right now.`;
+        }
+      }
+      setLastAction(message);
+      return { status: "added", message, ticker: normalized };
+    },
+    [loadTrackedQuotes, syncWatchSession, tradingTimeMode],
+  );
+
   const checkSelectedStocks = useCallback(async () => {
     if (!trackedTickers.length) {
-      setError("Load starter stocks from the dashboard first.");
+      setError("Add up to three tracked tickers first.");
       return;
     }
 
@@ -1577,6 +1702,7 @@ export function TradeWorkspaceProvider({
 
   useEffect(() => {
     if (tradingTimeMode !== "live" || !trackedTickers.length) {
+      setWatchSessionReady(false);
       return;
     }
 
@@ -1589,6 +1715,29 @@ export function TradeWorkspaceProvider({
 
   useEffect(() => {
     if (tradingTimeMode !== "live" || !trackedTickers.length) {
+      setWatchSessionReady(false);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      const watchStarted = await syncWatchSession(trackedTickers);
+      if (!cancelled && watchStarted) {
+          setWatchSyncTick((current) => current + 1);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [syncWatchSession, trackedTickers, tradingTimeMode]);
+
+  useEffect(() => {
+    if (
+      tradingTimeMode !== "live" ||
+      !trackedTickers.length ||
+      !watchSessionReady
+    ) {
       return;
     }
 
@@ -1615,14 +1764,28 @@ export function TradeWorkspaceProvider({
           setPaperTradeLog(session.paperTradeLog);
         }
       } catch {
-        // If the background session has not started yet, the local view still works.
+        if (cancelled) {
+          return;
+        }
+        const watchStarted = await syncWatchSession(trackedTickers);
+        if (watchStarted && !cancelled) {
+          setWatchSyncTick((current) => current + 1);
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [accountUserId, trackedTickers.length, tradingTimeMode, watchSyncTick]);
+  }, [
+    accountUserId,
+    syncWatchSession,
+    trackedTickers,
+    trackedTickers.length,
+    tradingTimeMode,
+    watchSessionReady,
+    watchSyncTick,
+  ]);
 
   useEffect(() => {
     if (
@@ -1796,7 +1959,7 @@ export function TradeWorkspaceProvider({
   const loadMockTradingDay = useCallback(async () => {
     const raw = selectedTicker || trackedTickers[0] || "";
     if (!raw) {
-      setMockTradingError("Load a tracked stock from the dashboard first.");
+      setMockTradingError("Add and select a tracked ticker first.");
       return;
     }
 
@@ -1829,6 +1992,30 @@ export function TradeWorkspaceProvider({
         return;
       }
 
+      if (tradingTimeMode === "live") {
+        void (async () => {
+          try {
+            const result = await executeAutoTrade(orderTicker, {
+              modelProfile,
+              cadence: refreshCadence,
+              userId: accountUserId,
+              requestedSide: side,
+              quantity: shares,
+            });
+            setLastAction(result.statusMessage);
+            await Promise.all([
+              refreshPaperAccount(),
+              refreshPortfolio({ background: true }),
+            ]);
+          } catch (err) {
+            setLastAction(
+              err instanceof Error ? err.message : "Trade failed.",
+            );
+          }
+        })();
+        return;
+      }
+
       const applyTo = (sim: TradingSimulation | null) => {
         if (!sim) {
           setLastAction("Simulation is still loading price history.");
@@ -1847,13 +2034,18 @@ export function TradeWorkspaceProvider({
         }
       };
 
-      if (tradingTimeMode === "live") {
-        setLiveSimulation((sim) => applyTo(sim));
-      } else {
-        setHistoricSimulation((sim) => applyTo(sim));
-      }
+      setHistoricSimulation((sim) => applyTo(sim));
     },
-    [quotesByTicker, selectedTicker, tradingTimeMode],
+    [
+      accountUserId,
+      modelProfile,
+      quotesByTicker,
+      refreshCadence,
+      refreshPaperAccount,
+      refreshPortfolio,
+      selectedTicker,
+      tradingTimeMode,
+    ],
   );
 
   const advanceSimulationTime = useCallback(
@@ -2109,6 +2301,7 @@ export function TradeWorkspaceProvider({
       setAutoTradeEnabled,
       refreshPaperAccount,
       loadTrackedQuotes,
+      addTrackedTicker,
       checkSelectedStocks,
       selectTrackedTicker,
       removeTrackedTicker,
@@ -2173,6 +2366,7 @@ export function TradeWorkspaceProvider({
       setAutoTradeEnabled,
       refreshPaperAccount,
       loadTrackedQuotes,
+      addTrackedTicker,
       checkSelectedStocks,
       selectTrackedTicker,
       removeTrackedTicker,
